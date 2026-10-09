@@ -472,6 +472,12 @@ func _refresh_fleet() -> void:
 			set_bar(fr["shield"], v.shields / max(1.0, v.max_shields), Color(0.35, 0.7, 1.0))
 
 
+## How the fog says the player last saw `u` ({} while it's in sight, or with fog off).
+func _ghost(u: Node) -> Dictionary:
+	var f = G.match_node.get("fog") if G.match_node else null
+	return f.ghost_of(u) if f else {}
+
+
 func _refresh_selection() -> void:
 	for c in sel_body.get_children():
 		c.queue_free()
@@ -502,6 +508,18 @@ func _refresh_selection() -> void:
 		if u.attack_target and is_instance_valid(u.attack_target):
 			_text_line("Engaging %s" % u.attack_target.display_name, WARN)
 		sel_keys.text = "Right-click: move / attack    B: board    L: fighters    U: go home and resupply    X: look inside"
+	elif u.get("kind") == "station" and _ghost(u).size() > 0:
+		# an enemy station out of sensor range: what we knew when we last saw it
+		var gh: Dictionary = _ghost(u)
+		sel_title.text = u.display_name
+		sel_sub.text = "%s  ·  %s" % [u.cls.replace("_", " ").capitalize(), G.team_name(int(gh["team"]))]
+		_text_line("Out of sensor range: as last seen %d s ago" % int(G.time - float(gh["t"])), WARN)
+		if gh.has("modules"):
+			_stat_line("MODULES", float(gh["modules_online"]) / max(1, int(gh["modules"])), Color(0.85, 0.75, 0.45),
+				"%d / %d online" % [int(gh["modules_online"]), int(gh["modules"])])
+		if gh.has("shields"):
+			_stat_line("SHIELDS", float(gh["shields"]) / max(1.0, float(gh["max_shields"])), Color(0.35, 0.7, 1.0), "%d" % int(gh["shields"]))
+		sel_keys.text = "Send a ship or troops close to see it as it is now"
 	elif u.get("kind") == "station":
 		sel_title.text = u.display_name
 		sel_sub.text = "%s  ·  %s" % [u.cls.replace("_", " ").capitalize(), G.team_name(u.team)]
@@ -691,6 +709,8 @@ func refresh_fps(c: Node, look_text: String) -> void:
 	set_bar(vit_hp, c.hp / c.max_hp, _hp_col(c))
 	vit_hp_text.text = "%d" % c.hp if c.state == "alive" else "DOWN"
 	vit_armor.text = "ARMOR %d%%" % int((c.dr + G.dr_bonus(c.team)) * 100.0)
+	if c.eva_out or c.suit_air < c.suit_max() - 0.5:
+		vit_armor.text += "  ·  %sAIR %d s" % ["" if c.suit_air > 10.0 else "!! ", int(c.suit_air)]
 	set_bar(exo_bar, c.exo / c.exo_max(), Color(0.5, 0.8, 1.0))
 	if c.armed and c.gl_mode:
 		var left: int = c.breach_ammo if c.gl_breach else c.gl_ammo

@@ -72,7 +72,7 @@ func _physics_process(dt: float) -> void:
 			_snap()
 		return
 	if i >= shots.size():
-		get_tree().quit()
+		G.quit()
 		return
 	if shots[i][1].begins_with("tp_kit") and String(shots[i][0]).begins_with("F2") and c.faction != 2:
 		_swap_in_f2_grenadier()

@@ -48,4 +48,4 @@ func _physics_process(dt: float) -> void:
 				remote.display if remote else "MISSING", remote.global_position if remote else "-", remote.mag if remote else "-"])
 			print("NET RESULT host: %s" % ("PASS" if remote != null else "FAIL"))
 		await get_tree().create_timer(1.0).timeout
-		get_tree().quit()
+		G.quit()

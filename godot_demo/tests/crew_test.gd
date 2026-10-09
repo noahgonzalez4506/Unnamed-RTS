@@ -36,4 +36,4 @@ func _physics_process(dt: float) -> void:
 			print("CREWTEST stat %s %d" % [k, G.stats[k]])
 		for v in G.vessels:
 			print("CREWTEST %-20s supplies %.0f  infected %.2f" % [v.display_name, v.supplies, v.infected_fraction()])
-		get_tree().quit()
+		G.quit()

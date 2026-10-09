@@ -8,11 +8,11 @@ func _ready() -> void:
 		for f in DirAccess.get_files_at(d):
 			if f.ends_with(".gd"):
 				var s = load(d + "/" + f)
-				if s == null:
+				if s == null or (s is GDScript and not (s as GDScript).can_instantiate()):   # (a parse error can still load)
 					print("COMPILE FAIL ", f)
 					fails += 1
 	if fails > 0:
 		print("COMPILE FAILED %d" % fails)
 	else:
 		print("COMPILE DONE")
-	get_tree().quit(1 if fails > 0 else 0)
+	G.quit(1 if fails > 0 else 0)

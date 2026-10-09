@@ -127,4 +127,4 @@ func _report() -> void:
 	for f in fails:
 		print("LOGTEST FAIL: ", f)
 	print("LOGTEST RESULT: %s (%d problems)" % ["PASS" if fails.is_empty() else "FAIL", fails.size()])
-	get_tree().quit(0 if fails.is_empty() else 1)
+	G.quit(0 if fails.is_empty() else 1)

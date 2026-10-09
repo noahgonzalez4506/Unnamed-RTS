@@ -216,4 +216,4 @@ func _to_menu() -> void:
 func _quit() -> void:
 	_save_campaign()
 	G.save_settings()
-	get_tree().quit()
+	G.quit()

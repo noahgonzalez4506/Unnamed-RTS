@@ -60,7 +60,7 @@ func _process(dt: float) -> void:
 			print("SHOT ", steps[i][1])
 			i += 1
 			if i >= steps.size():
-				get_tree().quit()
+				G.quit()
 		return
 	if i < steps.size() and G.time >= steps[i][0]:
 		steps[i][2].call()

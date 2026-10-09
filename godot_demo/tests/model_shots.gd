@@ -37,7 +37,7 @@ func _ready() -> void:
 	for fac in ["F1", "F2", "P"]:
 		await _shoot_lineup("res://models/characters", "char_%s_" % fac, "chars_%s" % fac, 2.2)
 	await _shoot_lineup("res://models/weapons", "weapon_", "weapons", 1.2)
-	get_tree().quit()
+	G.quit()
 
 
 func _snap(name_: String) -> void:

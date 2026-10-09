@@ -3,6 +3,7 @@ extends "res://scripts/vessel.gd"
 ## and is lost if its hull fails or its bridge is captured.
 
 const POD := preload("res://scripts/pod.gd")
+const EVA := preload("res://scripts/eva.gd")
 const FIGHTER := preload("res://scripts/fighter.gd")
 const MISSILE := preload("res://scripts/missile.gd")
 const SHUTTLE := preload("res://scripts/shuttle.gd")
@@ -25,6 +26,7 @@ const STATS := {
 }
 const BOLT_SPEED := 700.0
 const POD_RANGE := 1500.0
+const EVA_RANGE := 260.0           # hull to hull: as far as suited troopers will cross on thruster packs
 
 # ---- guns. Fleet composition matters: a gun's penetration against a hull's armour scales its
 # damage, so a swarm of light guns barely scratches a big ship, while big guns are slow to
@@ -1129,6 +1131,62 @@ func reinforcement_pod(v: Node, near_world: Vector3, sq) -> bool:
 	return true
 
 
+# ------------------------------------------------------------------ EVA boarding
+
+## Roughly the open space between our hull and v's (centre distance less both half-widths).
+func hull_gap(v: Node) -> float:
+	var r2: float = maxf(v.aabb.size.x, v.aabb.size.z) * 0.5 if v.get("aabb") != null else 0.0
+	var c2: Vector3 = v.to_global(v.aabb.get_center()) if v.get("aabb") != null else v.global_position
+	return to_global(aabb.get_center()).distance_to(c2) - maxf(aabb.size.x, aabb.size.z) * 0.5 - r2
+
+
+func can_eva(v: Node) -> bool:
+	return troops >= 4 and is_instance_valid(v) and not v.destroyed and v != self and v.has_method("boarding_entries") \
+		and hull_gap(v) < EVA_RANGE and not _eva_exit(v).is_empty()
+
+
+## Our way out nearest v (its boarding entry): an airlock, else (big ships have none) the
+## maintenance hatch at a breach zone. [] if neither.
+func _eva_exit(v: Node) -> Array:
+	if not is_instance_valid(v):
+		return []
+	var es: Array = boarding_entries(v.global_position)
+	for e in es:
+		if String(e[3]).contains("Airlock"):
+			return e
+	return es[0] if not es.is_empty() else []
+
+
+## An EVA boarding team: suited troopers cycle out of our airlock nearest v and cross on
+## thruster packs (riders: people who joined at the airlock go too; troops fill it to 8).
+func launch_eva(v: Node, riders: Array = []) -> bool:
+	if not can_eva(v) and (riders.is_empty() or not _in_range(v, POD_RANGE) or _eva_exit(v).is_empty()):
+		return false
+	var mine: Array = _eva_exit(v)
+	var hull: Vector3 = (mine[1] as Node3D).global_position
+	var entries: Array = v.boarding_entries(hull)
+	if entries.is_empty() or G.match_node == null:
+		return false
+	var team_riders: Array = riders.slice(0, 8)
+	var size_: int = mini(8 - team_riders.size(), troops)
+	troops -= size_
+	var lp: Vector3 = snap_local(to_local((mine[2] as Node3D).global_position))
+	for i in size_:
+		team_riders.append(G.match_node.spawn_character(self, lp, team, faction, "eva_boarder"))
+	if team_riders.is_empty():
+		return false
+	var out_p: Vector3 = hull + ((mine[0] as Node3D).global_position - hull).normalized() * 3.0
+	var t: Node3D = EVA.new()
+	get_tree().root.add_child(t)
+	t.setup(out_p, team, faction, v, entries[0], self, mine)
+	t.riders = team_riders
+	for r in team_riders:
+		r.embark(t)
+	G.say("%s: EVA team of %d out the airlock for %s" % [display_name, team_riders.size(), v.display_name], team)
+	G.stat("eva_launched")
+	return true
+
+
 func _in_range(v: Node, r: float) -> bool:
 	return is_instance_valid(v) and not v.destroyed and v != self and global_position.distance_to(v.global_position) < r
 
@@ -1449,11 +1507,13 @@ func start_boarding(v: Node, kind_: String = "pods", count: int = 2) -> bool:
 		return false
 	if kind_ == "pods" and not can_board(v):
 		return false
+	if kind_ == "eva" and not can_eva(v):
+		return false
 	var humans: bool = G.match_node != null and G.match_node.humans_on(team)
 	var t := MUSTER_HUMAN if humans else MUSTER_AI
 	boarding = {"target": v, "kind": kind_, "count": count, "t": t, "total": t}
 	if humans:
-		G.say("%s: BOARDING PARTY to the %s! Launch in %d s" % [display_name, "pod bays" if kind_ == "pods" else "hangar",
+		G.say("%s: BOARDING PARTY to the %s! Launch in %d s" % [display_name, {"pods": "pod bays", "eva": "airlock"}.get(kind_, "hangar"),
 			int(t)], team)
 	return true
 
@@ -1474,6 +1534,11 @@ func muster_points(kind_: String = "") -> Array:
 		var p := shuttle_pad()
 		if not p.is_empty():
 			out.append(snap_local(p["local"] + Vector3(4.0, 0, 0)))
+		return out
+	if kind_ == "eva":
+		var ex: Array = _eva_exit(boarding.get("target"))
+		if not ex.is_empty():
+			out.append(snap_local(to_local((ex[2] as Node3D).global_position)))
 		return out
 	for m in marks_like("PodBay_*_Muster"):
 		out.append(local_of(m))
@@ -1527,6 +1592,8 @@ func _boarding_tick(dt: float) -> void:
 	cancel_boarding()
 	if kind_ == "shuttle":
 		launch_shuttle(v, riders)
+	elif kind_ == "eva":
+		launch_eva(v, riders)
 	else:
 		launch_pods(v, count, riders)
 

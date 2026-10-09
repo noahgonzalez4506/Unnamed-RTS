@@ -33,7 +33,7 @@ func _ready() -> void:
 			if ResourceLoader.exists(p):
 				for view in [0, 1]:
 					await _shoot(p, "%s_%s_%d" % [cls, d.substr(6), view], view)
-	get_tree().quit()
+	G.quit()
 
 
 func _shoot(path: String, name_: String, view: int) -> void:

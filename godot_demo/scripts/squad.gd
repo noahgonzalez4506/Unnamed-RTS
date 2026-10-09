@@ -231,7 +231,29 @@ func _slot_at(center: Vector3, i: int, face: Vector3) -> Vector3:
 		# no room for the wedge here (a corridor): fall into single file behind the leader
 		want = center - face * (1.3 * (i + 1))
 		snapped_ = vessel.snap_local(want)
+	if in_fire_line(snapped_, null):
+		snapped_ = vessel.snap_local(snapped_ - face * 1.5)     # in a shooter's line: drop back behind
 	return snapped_
+
+
+## Whether local point `p` sits in the line of fire of a squadmate (other than `me`) who's
+## shooting at someone right now.
+func in_fire_line(p: Vector3, me: Node) -> bool:
+	for m in members:
+		if not is_instance_valid(m) or m == me or m.state != "alive" or not m.los:
+			continue
+		var tg = m.target
+		if tg == null or not is_instance_valid(tg) or tg.get("vessel") != vessel:
+			continue
+		var fd: Vector3 = tg.position - m.position
+		fd.y = 0.0
+		if fd.length() < 0.5:
+			continue
+		var t := clampf((p - m.position).dot(fd) / fd.length_squared(), 0.0, 1.0)
+		var q: Vector3 = m.position + fd * t
+		if t > 0.03 and t < 0.97 and Vector2(p.x - q.x, p.z - q.z).length() < 0.9:
+			return true
+	return false
 
 
 var _stack_cache: Dictionary = {}
@@ -318,14 +340,20 @@ func bound_point(c: Node) -> Vector3:
 		var d := p.distance_to(step)
 		var facing: Vector3 = (goal - p)
 		facing.y = 0.0
-		if d < bd and facing.normalized().dot(cp[2]) > 0.3 and not _claimed(p, c):
+		if d < bd and facing.normalized().dot(cp[2]) > 0.3 and not _claimed(p, c) and not in_fire_line(p, c):
 			bd = d
 			best = cp
 	if not best.is_empty():
 		return best[0]
-	# no free cover: an open spot near the step, clear of the others
+	# no free cover: an open spot near the step, clear of the others and of their lines of fire
 	var a: float = (members.find(c) % 8) * 0.785
-	return vessel.snap_local(step + Vector3(cos(a), 0, sin(a)) * 1.2)
+	var spot: Vector3 = vessel.snap_local(step + Vector3(cos(a), 0, sin(a)) * 1.2)
+	for k in 4:
+		if not in_fire_line(spot, c):
+			break
+		a += 1.57
+		spot = vessel.snap_local(step + Vector3(cos(a), 0, sin(a)) * 2.0)
+	return spot
 
 
 ## Someone else in the squad is in, or heading for, that spot.
@@ -366,8 +394,11 @@ func _start_clear(d: Dictionary) -> void:
 			bd = dd
 			thrower = m
 			use_emp = has_emp
+	var bang_at: Vector3 = vessel.to_global(inside + Vector3(0, 0.3, 0) + nrm * side * 1.5)
+	if thrower and thrower._friend_in_blast(bang_at, 7.5 if use_emp else 6.0):
+		thrower = null                                     # a friend's already in there: no bang
 	if thrower:
-		thrower._throw_grenade(vessel.to_global(inside + Vector3(0, 0.3, 0) + nrm * side * 1.5), use_emp)
+		thrower._throw_grenade(bang_at, use_emp)
 		G.say("%s: %s out!" % [thrower.display, "EMP" if use_emp else "frag"], team)
 		clear["go_at"] = G.time + (2.1 if use_emp else 2.9)
 		clear["until"] += 3.0

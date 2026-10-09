@@ -116,8 +116,15 @@ var kick := 0.0                    # recoil the camera still has to climb
 var piloting: Node = null          # the ship or fighter this player is flying
 var fog_hidden := false           # out of the player's sight on open ground (fog.gd)
 var riding: Node = null            # the boarding pod or shuttle carrying us
+var ride_seat: Node3D = null       # ...and the seat we sit in (shown seated there, riding along)
 var mustered: Node = null          # the ship whose boarding party we joined (waiting at the bay)
 var gunning := {}                  # the player in a gunner's seat: {ship, idx}
+# ---- vacuum: every soldier's armour holds a few breaths of air; EVA troopers' suits hold ten minutes
+var suit_air := 45.0               # seconds of air left in the suit
+var vent_push := Vector3.ZERO      # (vessel space) a venting compartment dragging us toward the hole
+var eva_out := false               # (the player) out of the hull on a thruster pack
+var eva_cycle := {}                # (the player) cycling an airlock or cutting in: {t, total, kind, vessel, entry}
+var _vac_at := -10.0               # when we last breathed vacuum
 # ---- multiplayer
 var owner_peer := 0                # a remote player drives this body (host side)
 var net_pos := Vector3.INF         # puppets (client side): where the host says we are
@@ -147,6 +154,7 @@ func setup(v: Node3D, team_: int, faction_: int, role_: String) -> void:
 	team = team_
 	faction = faction_
 	role = role_
+	suit_air = suit_max()
 	collision_layer = G.LAYER_CHAR
 	collision_mask = G.LAYER_WORLD | G.LAYER_DOOR
 	floor_max_angle = deg_to_rad(46.0)
@@ -467,13 +475,32 @@ func embark(craft: Node) -> void:
 	elev = {}
 	working = false
 	carrying = false
-	visible = false
 	collision_layer = 0
+	ride_seat = craft.seat_for(self) if craft.has_method("seat_for") else null
+	visible = ride_seat != null                        # seated where people can see us, else out of sight
+	if craft.get("eva") == true:
+		collision_layer = G.LAYER_CHAR                 # out in the open on a thruster pack: a target
+
+
+## Riding: sit in our seat, facing across the cabin (or forward, in a seat on the centre line).
+func _sit_in(seat: Node3D) -> void:
+	var craft: Node3D = riding
+	if craft.get("eva") == true:
+		global_transform = seat.global_transform       # (an EVA team: flying in formation)
+		return
+	var up: Vector3 = craft.global_basis.y.normalized()
+	var sl: Vector3 = craft.to_local(seat.global_position)
+	var face: Vector3 = (craft.to_global(Vector3(0, sl.y, sl.z)) - seat.global_position) if absf(sl.x) > 0.3 else -craft.global_basis.z
+	if face.length() < 0.01:
+		face = -craft.global_basis.z
+	global_transform = Transform3D(Basis.looking_at(face.normalized(), up), seat.global_position - up * 0.45)
 
 
 ## Step out of a pod or shuttle into vessel v at local position lp.
 func disembark_to(v: Node3D, lp: Vector3) -> void:
 	riding = null
+	ride_seat = null
+	rotation = Vector3(0, rotation.y, 0)              # (stood up out of the seat)
 	visible = true
 	collision_layer = G.LAYER_CHAR
 	if v != vessel:
@@ -487,6 +514,152 @@ func disembark_to(v: Node3D, lp: Vector3) -> void:
 	stop()
 	order = {}
 	run = true
+
+
+# ------------------------------------------------------------------ vacuum and EVA
+
+## In a vacuum suit (EVA troopers, drop troopers) or something that doesn't breathe (the infection).
+func suited() -> bool:
+	return role in ["eva_boarder", "drop_trooper"] or team == 4
+
+
+func suit_max() -> float:
+	return 600.0 if role in ["eva_boarder", "drop_trooper"] else 45.0
+
+
+## A breath of vacuum: from the suit while it lasts, then suffocation (armour doesn't help).
+func breathe_vacuum(dt: float) -> void:
+	if team == 4 or state == "dead":
+		return
+	_vac_at = G.time
+	suit_air = maxf(0.0, suit_air - dt)
+	if suit_air <= 0.0:
+		take_damage(6.0 * dt / (1.0 - clampf(dr + G.dr_bonus(team), 0.0, 0.75)), null)
+
+
+## Out of the hull, or in a compartment that has vented: no gravity (mag boots hold you to a deck).
+func zero_g() -> bool:
+	if eva_out:
+		return true
+	if (G.match_node and G.match_node.get("on_surface") == true) or vessel.get("openings") == null or vessel.openings.is_empty():
+		return false
+	return vessel.air_at(position) < 0.35
+
+
+## Zero-g: thrust where you look (WASD, Space up, C down) on the suit's exo energy, V for a hard
+## burn; a little drag so you don't drift forever.
+func _zero_g_move(dt: float, input: Vector2) -> void:
+	var cb: Basis = G.commander.fps_cam.global_basis if G.commander else global_basis
+	var up_in := (1.0 if Input.is_action_pressed("jump") else 0.0) - (1.0 if Input.is_action_pressed("crouch") else 0.0)
+	var dir: Vector3 = cb * Vector3(input.x, up_in, input.y)
+	if dir.length() > 0.1 and exo > 0.0:
+		velocity += dir.normalized() * 7.0 * dt
+		exo = maxf(0.0, exo - 9.0 * dt)
+		exo_cd = 0.6
+	if Input.is_action_just_pressed("dash") and exo >= 30.0:
+		exo -= 30.0
+		exo_cd = 0.8
+		velocity += (dir.normalized() if dir.length() > 0.1 else -cb.z) * 8.0
+		G.flash(global_position + Vector3.UP * 0.9, Color(0.5, 0.8, 1.0), 2.0, 3.0, 0.1)
+	velocity = velocity.limit_length(14.0) * (1.0 - 0.3 * dt)
+
+
+## A compartment venting around us: crew get out to good air; soldiers fight on while the suit lasts.
+func _flee_vacuum() -> bool:
+	if vessel.air_at(position) > 0.6 or (is_combatant() and suit_air > 20.0) or (role == "engineer" and suit_air > 15.0):
+		return false                                   # (engineers patch the hole on their emergency air)
+	var p: Vector3 = vessel.safe_air_point(position)
+	if p == Vector3.INF:
+		return false
+	if goal == Vector3.INF or goal.distance_to(p) > 2.0:
+		go(p, true)
+	return true
+
+
+var _exit_at := -10.0
+var _exit_cache: Array = []
+
+
+## (The player) standing at one of our own vessel's ways out (an airlock, or the maintenance hatch
+## at a breach zone): its entry, else [].
+func eva_exit_entry() -> Array:
+	if eva_out or vessel.team != team or not vessel.has_method("boarding_entries"):
+		return []
+	if G.time - _exit_at < 0.25:
+		return _exit_cache
+	_exit_at = G.time
+	_exit_cache = []
+	for e in vessel.boarding_entries(global_position):
+		if vessel.to_local((e[2] as Node3D).global_position).distance_to(position) < 2.5:
+			_exit_cache = e
+			break
+	return _exit_cache
+
+
+var _near_at := -10.0
+var _near_cache: Array = []
+
+
+## (The player, out on EVA) the way in nearest us on any hull within reach: [vessel, entry], or [].
+func eva_entry_near() -> Array:
+	if not eva_out:
+		return []
+	if G.time - _near_at < 0.25:
+		return _near_cache
+	_near_at = G.time
+	_near_cache = []
+	for v in G.vessels:
+		if not is_instance_valid(v) or v.destroyed or not v.has_method("boarding_entries") or v.get("aabb") == null:
+			continue
+		if v.to_global(v.aabb.get_center()).distance_to(global_position) > v.aabb.size.length() * 0.6 + 20.0:
+			continue
+		var es: Array = v.boarding_entries(global_position)
+		if not es.is_empty() and (es[0][1] as Node3D).global_position.distance_to(global_position) < 8.0:
+			_near_cache = [v, es[0]]
+			break
+	return _near_cache
+
+
+## Out through the airlock / in through one (or, on an enemy hull, cutting in): kind out, in, cut.
+func eva_begin(kind: String, v: Node, e: Array) -> void:
+	var total := 4.0 if kind == "cut" else 2.5
+	eva_cycle = {"t": total, "total": total, "kind": kind, "vessel": v, "entry": e}
+	stop()
+
+
+func _eva_cycle_tick(dt: float) -> void:
+	var kind: String = eva_cycle["kind"]
+	var v: Node = eva_cycle["vessel"]
+	var e: Array = eva_cycle["entry"]
+	if not is_instance_valid(v) or v.destroyed or not is_instance_valid(e[1]) or not is_instance_valid(e[2]):
+		eva_cycle = {}
+		return
+	var at: Vector3 = (e[2] as Node3D).global_position if kind == "out" else (e[1] as Node3D).global_position
+	if global_position.distance_to(at) > 9.0:
+		eva_cycle = {}                                     # (moved off: the cycle stops)
+		return
+	if kind == "cut" and Engine.get_physics_frames() % 6 == 0:
+		G.flash((e[1] as Node3D).global_position, Color(1.0, 0.75, 0.35), 1.2, 2.0, 0.05)
+	eva_cycle["t"] -= dt
+	if eva_cycle["t"] > 0.0:
+		return
+	eva_cycle = {}
+	var hull: Vector3 = (e[1] as Node3D).global_position
+	var outward: Vector3 = ((e[0] as Node3D).global_position - hull).normalized()
+	if kind == "out":
+		eva_out = true                                     # outer door open: out onto the hull
+		position = vessel.to_local(hull + outward * 3.0)
+		velocity = Vector3.ZERO
+		G.stat("eva_exits")
+		return
+	if kind == "cut":
+		v.breach(e[3])                                     # (the compartment behind vents)
+		v.raise_alarm(v.to_local((e[2] as Node3D).global_position))
+		G.say("EVA breach: %s cut into %s" % [display, v.display_name], v.team)
+		G.explosion(hull, 2.0)
+	eva_out = false
+	disembark_to(v, v.snap_local(v.to_local((e[2] as Node3D).global_position)))
+	G.stat("eva_entries")
 
 
 func stop() -> void:
@@ -718,6 +891,8 @@ func _phys(dt: float) -> void:
 		return
 	if riding != null:
 		velocity = Vector3.ZERO
+		if ride_seat != null and is_instance_valid(ride_seat) and is_instance_valid(riding):
+			_sit_in(ride_seat)
 		_timers(dt)
 		return
 	# EMP'd: staggered and blind for a moment (no moving, no shooting, no seeing). A client's
@@ -738,7 +913,8 @@ func _phys(dt: float) -> void:
 		if stun_t <= 0.0 and role != "infected":
 			rig.twitch = 0.0
 		return
-	if position.y < vessel.aabb.position.y - 15.0 and vessel.nav_ok():
+	if position.y < vessel.aabb.position.y - 15.0 and vessel.nav_ok() and not (eva_out and position.length() < 3000.0):
+		eva_out = false
 		# fell off the hull into the void: back to the ship's cargo hold (or anywhere safe aboard)
 		var hold: Array = vessel.marks_like("CargoStorage_*") + vessel.marks_like("Storage_*_Stores_*")
 		position = vessel.snap_local(vessel.local_of(hold[0])) if not hold.is_empty() else vessel.random_local()
@@ -776,7 +952,8 @@ func _process(dt: float) -> void:
 		return
 	# hide people above the commander's cutaway
 	var cut: float = G.cut_height                       # (reading the shader global back is very slow)
-	var show_: bool = (global_position.y < cut - 0.4 or vessel.kind == "ground") and riding == null and not fog_hidden
+	var seated: bool = riding != null and ride_seat != null and is_instance_valid(ride_seat)
+	var show_: bool = (global_position.y < cut - 0.4 or vessel.kind == "ground" or seated) and (riding == null or seated) and not fog_hidden
 	rig.visible = show_
 	if not show_:
 		return
@@ -787,7 +964,8 @@ func _process(dt: float) -> void:
 	rig.speed = Vector3(velocity.x, 0, velocity.z).length() if not G.is_client() or self == G.possessed else net_speed
 	rig.crouch = crouch or slide_t > 0.0
 	rig.ads = ads and self == G.possessed
-	rig.mode = "dead" if state == "dead" else ("downed" if state == "downed" else ("seated" if piloting else _anim_mode()))
+	var floating: bool = seated and riding.get("eva") == true
+	rig.mode = "dead" if state == "dead" else ("downed" if state == "downed" else ("seated" if piloting or (seated and not floating) else _anim_mode()))
 	if reload_t >= 0.0:
 		rig.reload = 1.0 - reload_t / max(0.1, float(wstats.get("reload_s", 2.0)))
 	else:
@@ -856,6 +1034,9 @@ func _ai_physics(dt: float) -> void:
 		elif _sep.length() > 0.4 and not working and (vessel.alarm > 0.0 or team != vessel.team):
 			v = _sep.normalized() * 1.2                    # shuffle apart while standing (in a fight)
 			_settled = false
+	if vent_push != Vector3.ZERO:
+		v += vent_push                                 # a hole in the hull dragging us toward it
+		_settled = false
 	var vg: Vector3 = vessel.global_basis * v          # paths are in the vessel's space; physics is in the world's
 	velocity.x = vg.x
 	velocity.z = vg.z
@@ -999,6 +1180,10 @@ func _timers(dt: float) -> void:
 	melee_t -= dt
 	fire_t -= dt
 	cover_cd -= dt
+	if G.time - _vac_at > 1.0 and suit_air < suit_max():
+		suit_air = minf(suit_max(), suit_air + 15.0 * dt)  # good air again: the suit tops up
+	if vent_push != Vector3.ZERO:
+		vent_push = vent_push.move_toward(Vector3.ZERO, dt * 1.2)
 
 
 # ------------------------------------------------------------------ AI thinking
@@ -1020,7 +1205,157 @@ func _think() -> void:
 	var t0 := Time.get_ticks_usec()
 	_separation()
 	_think2()
+	if team != 4 and state == "alive":
+		if not G.dangers.is_empty():
+			_keep_clear()
+		if is_combatant() and path_i < path.size():
+			_pass_behind_shooters()
 	G.stat("us_char_think", Time.get_ticks_usec() - t0)
+
+
+# ------------------------------------------------------------------ friendly-fire safety
+
+## A friendly grenade or breaching round is live: inside its blast, get out (away from it, at a
+## run); outside, don't walk into it, its blast or the room it's in until it has gone off.
+func _keep_clear() -> void:
+	var me_w := global_position
+	var d: Node = G.danger_for(team, me_w, 0.5)
+	if d != null:
+		var dp: Vector3 = vessel.to_local(d.danger_point())
+		var away: Vector3 = position - dp
+		away.y = 0.0
+		if away.length() < 0.1:
+			away = Vector3(randf_range(-1, 1), 0, randf_range(-1, 1))
+		var need: float = float(d.danger_radius()) + 1.5 - away.length()
+		go(vessel.snap_local(position + away.normalized() * maxf(need, 1.0)), true)
+		return
+	if goal == Vector3.INF:
+		return
+	# the next 10 m of the path, a point every metre and a half
+	var prev: Vector3 = position
+	var walked := 0.0
+	for k in range(path_i, mini(path_i + 4, path.size())):
+		var seg: Vector3 = path[k] - prev
+		var n: int = maxi(1, ceili(seg.length() / 1.5))
+		for j in n:
+			if G.danger_for(team, vessel.to_global(prev + seg * (float(j + 1) / n))) != null:
+				stop()                                   # hold here (still shooting) till it goes off
+				return
+		walked += seg.length()
+		prev = path[k]
+		if walked > 10.0:
+			break
+	# the room it's in: stay out until it's gone off
+	var gz: Dictionary = vessel.zone_at(goal)
+	if gz.is_empty() or is_same(gz, vessel.zone_at(position)):
+		return
+	for dn in G.dangers:
+		if is_instance_valid(dn) and not G.enemies(team, int(dn.team)):
+			var dl: Vector3 = vessel.to_local(dn.danger_point())
+			if vessel.aabb.has_point(dl) and is_same(vessel.zone_at(dl), gz):
+				stop()
+				return
+
+
+## Friends (downed ones too) inside a blast of radius `r` at world point `at`, in its line.
+func _friend_in_blast(at: Vector3, r: float) -> bool:
+	for o in G.characters:
+		if not is_instance_valid(o) or o == self or o.state == "dead" or G.enemies(team, o.team):
+			continue
+		if o.global_position.distance_to(at) < r \
+				and G.ray(at + Vector3.UP * 0.3, o.global_position + Vector3.UP * 1.0, [], G.LAYER_WORLD | G.LAYER_DOOR).is_empty():
+			return true
+	return false
+
+
+## A friend close to the line from `from` to `to` (world), between us and the target.
+func _friend_in_line(from: Vector3, to: Vector3) -> bool:
+	var ab := to - from
+	var l2 := maxf(ab.length_squared(), 0.0001)
+	for o in vessel.near_occupants(position, sqrt(l2) + 1.0):
+		if not is_instance_valid(o) or o == self or o.state == "dead" or G.enemies(team, o.team) or o.vessel != vessel:
+			continue
+		for h in [0.9, 1.4]:
+			var p: Vector3 = o.global_position + Vector3.UP * h
+			var t := clampf((p - from).dot(ab) / l2, 0.0, 1.0)
+			if t > 0.02 and t < 0.97 and p.distance_to(from + ab * t) < 0.7:
+				return true
+	return false
+
+
+var _clear_line_t := 0.0
+
+
+## Our shot is blocked by a friend: stand up to shoot over them, else take a side-step.
+func _clear_line(dir: Vector3) -> void:
+	if crouch:
+		crouch = false
+		return
+	if G.time < _clear_line_t or path_i < path.size():
+		return
+	_clear_line_t = G.time + 1.5
+	var dl: Vector3 = vessel.global_basis.inverse() * dir
+	var side: Vector3 = dl.cross(Vector3.UP)
+	side.y = 0.0
+	if side.length() < 0.01:
+		return
+	go(vessel.snap_local(position + side.normalized() * (1.3 if randf() < 0.5 else -1.3)), false)
+	G.stat("ff_sidesteps")
+
+
+var _detour_t := 0.0
+
+
+## On the move past a friend who's shooting: go round behind them, not across their muzzle.
+func _pass_behind_shooters() -> void:
+	if G.time < _detour_t:
+		return
+	# the next 8 m of the path (skipping waypoints we're already standing on)
+	var segs: Array = []
+	var prev: Vector3 = position
+	var ahead := 0.0
+	for k in range(path_i, mini(path_i + 16, path.size())):
+		var l: float = (path[k] as Vector3).distance_to(prev)
+		if l > 0.35:
+			segs.append([prev, path[k], k])
+			prev = path[k]
+			ahead += l
+			if ahead > 8.0:
+				break
+	if segs.is_empty():
+		return
+	for o in vessel.near_occupants(position, 8.0):
+		if not is_instance_valid(o) or o == self or o.team != team or o.state != "alive" or not o.los:
+			continue
+		var tg = o.target
+		if tg == null or not is_instance_valid(tg) or tg.get("vessel") != vessel:
+			continue
+		var fa: Vector3 = o.position
+		var fb: Vector3 = tg.position
+		var fd: Vector3 = fb - fa
+		fd.y = 0.0
+		if fd.length() < 0.5:
+			continue
+		var at_k := -1
+		for sg in segs:
+			for k in 6:
+				var p: Vector3 = (sg[0] as Vector3).lerp(sg[1], k / 5.0)
+				var t := clampf((p - fa).dot(fd) / fd.length_squared(), 0.0, 1.0)
+				var q: Vector3 = fa + fd * t
+				if t > 0.03 and Vector2(p.x - q.x, p.z - q.z).length() < 0.8:
+					at_k = int(sg[2])
+					break
+			if at_k >= 0:
+				break
+		if at_k < 0:
+			continue
+		var behind: Vector3 = vessel.snap_local(fa - fd.normalized() * 1.3)
+		if behind.distance_to(path[at_k]) > 0.5 and behind.distance_to(position) > 0.5:
+			path.insert(at_k, behind)
+			path_i = mini(path_i, at_k)
+			_detour_t = G.time + 2.0
+			G.stat("ff_detours")
+		return
 
 
 ## Personal space: a push away from teammates closer than about a metre, so squads
@@ -1059,6 +1394,8 @@ func _think2() -> void:
 		return
 	if hauling != null:
 		_haul()
+		return
+	if not suited() and vessel.get("openings") != null and not vessel.openings.is_empty() and _flee_vacuum():
 		return
 	if has_meta("retreat_to"):
 		go(get_meta("retreat_to"), true)               # falling back to the pods: run, shooting as we go
@@ -1161,7 +1498,8 @@ func _brain_combat() -> void:
 				crouch = squad.stack_door.is_empty() == false or squad.order.get("type", "") == "hold"
 			return
 	# grenades at targets hiding behind cover or bunched up
-	if not grenades.is_empty() and los and dist > 6.0 and dist < 22.0 and randf() < 0.06:
+	if not grenades.is_empty() and los and dist > 6.0 and dist < 22.0 and randf() < 0.06 \
+			and not _friend_in_blast(target.global_position, 6.0):
 		_throw_grenade(target.global_position)
 	# squads bound: one fireteam moves to the next cover while the other holds and fires
 	if squad and squad.bounding() and fireteam == squad.moving_team and dist > 7.0:
@@ -1640,6 +1978,11 @@ func _ai_fire(dt: float) -> void:
 	if team == 4:
 		spread *= 3.0
 	var aim: Vector3 = target.chest() + Vector3(randfn(0, 0.15), randfn(0, 0.2), randfn(0, 0.15))
+	if _friend_in_line(eye(), aim):
+		fire_t = 0.3                                     # a friend in the way: hold fire and clear the line
+		_clear_line(aim - eye())
+		G.stat("ff_held_shots")
+		return
 	var dir := (aim - eye()).normalized()
 	dir = dir.rotated(Vector3.UP, deg_to_rad(randfn(0, spread))).rotated(dir.cross(Vector3.UP).normalized(), deg_to_rad(randfn(0, spread)))
 	fire(eye(), dir, (rpm / 60.0) / sps)
@@ -1661,6 +2004,10 @@ func _suppress_fire() -> void:
 	var h := G.ray(eye(), p, [get_rid()], G.LAYER_WORLD | G.LAYER_DOOR)
 	if not h.is_empty() and (h.position as Vector3).distance_to(p) > 2.0:
 		return                                            # no line of fire from here
+	if _friend_in_line(eye(), p):
+		fire_t = 0.3
+		_clear_line(p - eye())
+		return
 	var rpm: float = float(wstats.get("rpm", 300))
 	fire_t = 1.0 / min(rpm / 60.0, 6.0) * randf_range(1.0, 1.6)
 	var dir := (p + Vector3(randfn(0, 0.5), randfn(0, 0.4), randfn(0, 0.5)) - eye()).normalized()
@@ -1765,11 +2112,32 @@ func fire_breach_round(from: Vector3, dir: Vector3, aim: Dictionary = {}) -> Nod
 	rig.recoil = 1.0
 	var r := BREACH_ROUND.new()
 	get_tree().root.add_child(r)
+	if aim.is_empty():
+		aim = _breach_target_along(from, dir)          # a player's round: what they aimed at, and only that
+		r.claim = false                                 # (it doesn't own that target's "charged" flag)
 	r.fire(from, dir, self, st, aim)
 	G.flash(from + dir * 0.2, Color(1.0, 0.75, 0.4), 1.6, 2.0, 0.06)
 	if G.sfx:
 		G.sfx.play("shotgun", from, -4.0 if self == G.possessed else -10.0)
 	return r
+
+
+## The breachable wall or intact door a round fired from `from` along `dir` would hit (or {}).
+func _breach_target_along(from: Vector3, dir: Vector3) -> Dictionary:
+	var hit := G.ray(from, from + dir.normalized() * 60.0, [get_rid()], G.LAYER_WORLD | G.LAYER_DOOR)
+	if hit.is_empty():
+		return {}
+	var v: Node = BREACH_ROUND._vessel_of(hit.collider)
+	if v == null:
+		return {}
+	var at_floor: Vector3 = v.to_local(hit.position) - Vector3(0, 1.2, 0)   # (wall_near / door_near take a standing spot)
+	var reach: float = float(G.data.get("items", {}).get("BreachRound", {}).get("reach_m", 1.5))
+	var d: Dictionary = v.wall_near(at_floor, reach) if v.has_method("wall_near") else {}
+	if d.is_empty() and v.has_method("door_near"):
+		d = v.door_near(at_floor, reach)
+		if not d.is_empty() and d["breached"]:
+			d = {}
+	return d
 
 
 ## AI grenadier as the squad's breacher: from 12 m or less with a clear line, fire a breaching
@@ -1877,6 +2245,10 @@ func stun(t: float) -> void:
 # ------------------------------------------------------------------ the player in control
 
 func _player_physics(dt: float) -> void:
+	if not eva_cycle.is_empty():
+		_eva_cycle_tick(dt)
+	if eva_out:
+		breathe_vacuum(dt)
 	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var sprint := Input.is_action_pressed("sprint") and input.y < -0.1 and not ads
 	var on_floor := is_on_floor()
@@ -1909,38 +2281,44 @@ func _player_physics(dt: float) -> void:
 	var want := (global_basis * Vector3(input.x, 0, input.y)) * spd
 	if slide_t > 0.0:
 		want = slide_dir * lerpf(4.0, 9.5, slide_t / 0.75)
-	var accel := 14.0 if on_floor else 2.5                # snappy on the deck, floaty in the air
-	velocity.x = move_toward(velocity.x, want.x, accel * spd * dt + (60.0 * dt if slide_t > 0.0 else 0.0))
-	velocity.z = move_toward(velocity.z, want.z, accel * spd * dt + (60.0 * dt if slide_t > 0.0 else 0.0))
-	# jumping: a normal jump, then an exo boost jump in the air
-	if Input.is_action_just_pressed("jump"):
-		if on_floor:
-			velocity.y = 4.6
-		elif not air_boost and exo >= 25.0:
-			air_boost = true
-			exo -= 25.0
+	if vent_push != Vector3.ZERO:
+		want += vessel.global_basis * vent_push            # the air rushing out drags at you
+	var zg := zero_g() and not on_floor
+	if zg:
+		_zero_g_move(dt, input)
+	else:
+		var accel := 14.0 if on_floor else 2.5                # snappy on the deck, floaty in the air
+		velocity.x = move_toward(velocity.x, want.x, accel * spd * dt + (60.0 * dt if slide_t > 0.0 else 0.0))
+		velocity.z = move_toward(velocity.z, want.z, accel * spd * dt + (60.0 * dt if slide_t > 0.0 else 0.0))
+		# jumping: a normal jump, then an exo boost jump in the air
+		if Input.is_action_just_pressed("jump"):
+			if on_floor:
+				velocity.y = 4.6
+			elif not air_boost and exo >= 25.0:
+				air_boost = true
+				exo -= 25.0
+				exo_cd = 0.8
+				velocity.y = 6.2
+				var fwd := global_basis * Vector3(input.x, 0, input.y)
+				velocity += fwd * 2.5
+				G.flash(global_position + Vector3.UP * 0.4, Color(0.5, 0.8, 1.0), 2.0, 3.0, 0.1)
+		# boost dash in any direction (V)
+		if Input.is_action_just_pressed("dash") and exo >= 30.0:
+			exo -= 30.0
 			exo_cd = 0.8
-			velocity.y = 6.2
-			var fwd := global_basis * Vector3(input.x, 0, input.y)
-			velocity += fwd * 2.5
-			G.flash(global_position + Vector3.UP * 0.4, Color(0.5, 0.8, 1.0), 2.0, 3.0, 0.1)
-	# boost dash in any direction (V)
-	if Input.is_action_just_pressed("dash") and exo >= 30.0:
-		exo -= 30.0
-		exo_cd = 0.8
-		var d := global_basis * Vector3(input.x, 0, input.y)
-		if d.length() < 0.1:
-			d = -global_basis.z
-		d = d.normalized()
-		velocity.x = d.x * 13.0
-		velocity.z = d.z * 13.0
+			var d := global_basis * Vector3(input.x, 0, input.y)
+			if d.length() < 0.1:
+				d = -global_basis.z
+			d = d.normalized()
+			velocity.x = d.x * 13.0
+			velocity.z = d.z * 13.0
+			if not on_floor:
+				velocity.y = max(velocity.y, 1.0)
+			G.flash(global_position + Vector3.UP * 0.9, Color(0.5, 0.8, 1.0), 2.0, 3.0, 0.1)
 		if not on_floor:
-			velocity.y = max(velocity.y, 1.0)
-		G.flash(global_position + Vector3.UP * 0.9, Color(0.5, 0.8, 1.0), 2.0, 3.0, 0.1)
-	if not on_floor:
-		velocity.y = max(velocity.y - 11.0 * dt, -25.0)
-	elif velocity.y < 0.0:
-		velocity.y = 0.0
+			velocity.y = max(velocity.y - 11.0 * dt, -25.0)
+		elif velocity.y < 0.0:
+			velocity.y = 0.0
 	move_and_slide()
 	_timers(dt)
 	# shooting (no shooting while sprinting or sliding: the gun is down)

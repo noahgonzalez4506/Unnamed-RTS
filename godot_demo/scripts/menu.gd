@@ -55,7 +55,7 @@ func _autotest() -> void:
 		await get_tree().create_timer(0.5).timeout
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(args[-1])
-		get_tree().quit()
+		G.quit()
 	if "--host" in args:
 		G.network.host("Host")
 		while G.network.players.size() < 2:
@@ -189,7 +189,7 @@ func _main_page() -> Control:
 	_button(v, "SKIRMISH VS AI", func(): show_page("play"))
 	_button(v, "MULTIPLAYER", func(): show_page("mp"))
 	_button(v, "SETTINGS", func(): show_page("settings"))
-	_button(v, "QUIT", func(): get_tree().quit())
+	_button(v, "QUIT", func(): G.quit())
 	return _wrap(v)
 
 

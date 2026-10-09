@@ -190,6 +190,12 @@ func _process(dt: float) -> void:
 
 func _unload() -> void:
 	var lp: Vector3 = target.snap_local(target.to_local(inside.global_position) + (Vector3(3.0, 0, 0) if target.kind == "ship" else Vector3.ZERO))
+	# out down the ramp: the foot of it, if that's on the deck
+	var ramp: Node3D = model.find_child("*_RampExit", true, false) as Node3D if model else null
+	if ramp:
+		var rl: Vector3 = target.snap_local(target.to_local(ramp.global_position))
+		if rl.distance_to(target.to_local(ramp.global_position)) < 4.0:
+			lp = rl
 	target.raise_alarm(lp)
 	G.say("%s boarding shuttle landed aboard %s" % [G.team_name(team), target.display_name], target.team)
 	G.stat("shuttle_landed")
@@ -197,6 +203,21 @@ func _unload() -> void:
 		G.match_node.disembark(target, lp, team, faction, roles, riders)
 	roles = []
 	riders = []
+
+
+## Seats in the model (its *_Seat_n markers, in order); each rider gets the next free one.
+var _seats: Array = []
+
+
+func seat_for(c: Node) -> Node3D:
+	if _seats.is_empty() and model:
+		for n in model.find_children("*_Seat_*", "Node3D", true, false):
+			_seats.append(n)
+		_seats.sort_custom(func(a, b): return int(String(a.name).get_slice("_Seat_", 1)) < int(String(b.name).get_slice("_Seat_", 1)))
+	var i: int = riders.find(c)
+	if i < 0:
+		i = riders.size()
+	return _seats[i] if i < _seats.size() else null
 
 
 func _go_home(dt: float) -> void:

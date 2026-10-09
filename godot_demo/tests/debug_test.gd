@@ -53,4 +53,4 @@ func _physics_process(dt: float) -> void:
 		for p in G.pods:
 			print("   pod stage ", p.stage, " at ", p.global_position, " goal ", p.approach_m.global_position if p.stage == 0 else p.impact_m.global_position)
 	if t > 40.0:
-		get_tree().quit()
+		G.quit()

@@ -30,6 +30,7 @@ func _process(_dt: float) -> void:
 		ch.queue_free()
 	if not ships.is_empty():
 		_b("BOARD (B)", func(): cmd.cmd_board())
+		_b("EVA BOARD", func(): cmd.cmd_board("eva"))
 		_b("FIGHTERS (L)", func(): cmd.cmd_fighters())
 		_b("RESUPPLY (U)", func():
 			for s in cmd.selection:
@@ -83,6 +84,17 @@ func _process(_dt: float) -> void:
 					for x in cmd.selection:
 						if is_instance_valid(x) and x.get("kind") == "ship" and x.cls == "SMALL_SUPPORT":
 							cmd.log_event(G.match_node.DEPOT.load_cargo(G.match_node, x), cmd.TEAM))
+				var ah := false
+				for x in cmd.selection:
+					if is_instance_valid(x) and x.get("kind") == "ship" and x.cls == "SMALL_SUPPORT" and x.has_meta("fleet_id"):
+						ah = ah or G.campaign.fleet_entry(int(x.get_meta("fleet_id"))).get("auto_haul", false)
+				_b("AUTO HAUL: %s" % ("ON" if ah else "OFF"), func():
+					for x in cmd.selection:
+						if is_instance_valid(x) and x.get("kind") == "ship" and x.cls == "SMALL_SUPPORT" and x.has_meta("fleet_id"):
+							var fe: Dictionary = G.campaign.fleet_entry(int(x.get_meta("fleet_id")))
+							if not fe.is_empty():
+								fe["auto_haul"] = not ah
+					cmd.log_event("Auto haul %s: landed supply ships load secured salvage by themselves" % ("off" if ah else "ON"), cmd.TEAM))
 			_b("TAKE OFF", func(): G.match_node.take_off())
 		elif cmd.camp_ui:
 			_b("LAND", func(): cmd.camp_ui.toggle_landing(cmd.selection.duplicate()))

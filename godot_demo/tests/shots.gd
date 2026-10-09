@@ -129,7 +129,7 @@ func _process(dt: float) -> void:
 			print("SHOT ", shots[i][1], " at ", G.time)
 			i += 1
 			if i >= shots.size():
-				get_tree().quit()
+				G.quit()
 		return
 	if i < shots.size() and G.time >= shots[i][0]:
 		shots[i][2].call()

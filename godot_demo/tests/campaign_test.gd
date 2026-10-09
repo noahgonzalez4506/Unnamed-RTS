@@ -13,6 +13,8 @@ var me: Node
 var post: Node
 var cam: Camera3D
 var _cam_on := false
+var _vis := 0                      # (pictures only) the city and the RTS view with the fog
+var _vis_t := 0.0
 
 
 func _ready() -> void:
@@ -86,6 +88,14 @@ func _physics_process(dt: float) -> void:
 					_look(hp + (hp - (pl["pos"] as Vector3)).normalized() * 700.0 + Vector3.UP * 320.0, (pl["pos"] as Vector3).lerp(hp, 0.4))
 					_shot("01_home_system")
 		1:
+			if out != "" and t - _w > 0.6 and not report.has("s_station"):
+				# the starter station close up, from above: the T (docking boom across the spine's end)
+				report["s_station"] = true
+				var st: Node3D = G.match_node.homes[1]
+				var sc: Vector3 = st.to_global(st.aabb.get_center())
+				var sr: float = st.aabb.size.length()
+				_look(sc + st.global_basis.y * sr * 0.9 + st.global_basis.z * sr * 0.35, sc)
+				await _shot("01b_starter_station")
 			if out != "" and t - _w > 1.0 and not report.has("s_mine"):
 				for mc in G.match_node.miner_crafts:
 					if is_instance_valid(mc) and mc.stage == 2:
@@ -233,7 +243,7 @@ func _physics_process(dt: float) -> void:
 			if "--perf" in OS.get_cmdline_user_args() and t > 3.0:
 				_perf(t)
 				return
-			if t > 3.0:
+			if t > 3.0 and not report.has("on_surface"):    # (once: its pictures await frames, and _process keeps coming)
 				report["on_surface"] = G.match_node.on_surface
 				report["surface_ships"] = G.vessels.filter(func(v): return v.team == 1 and v.kind == "ship").size()
 				report["surface_bases"] = G.vessels.filter(func(v): return v.kind == "station").size()
@@ -247,6 +257,8 @@ func _physics_process(dt: float) -> void:
 				load("res://scripts/campaign/ruins.gd")._city(G.match_node, Lc,
 					load("res://scripts/campaign/surface.gd")._terrain_params(G.match_node.system), rr)
 				report["city_cover_points"] = G.match_node.ground_cover.size() - cov0
+				report["city_meshes_folded"] = int(G.stats.get("city_meshes_folded", 0))
+				report["city_meshes_merged"] = int(G.stats.get("city_meshes_merged", 0))
 				var gnd: Node3D = G.match_node.ground
 				report["ground_nav"] = gnd != null and gnd.nav_ok()
 				report["city"] = not G.match_node.city.is_empty()
@@ -284,6 +296,21 @@ func _physics_process(dt: float) -> void:
 					report["depot_crates"] = (G.match_node.get_meta("depot_crates", []) as Array).size()
 					G.match_node.DEPOT.tick(G.match_node)
 					report["depot_load"] = G.match_node.DEPOT.load_cargo(G.match_node, sh0[0])
+					# salvage a ship takes rides in its hold, and pays out at a station
+					var fc := Node3D.new()
+					fc.set_meta("cache", "cores")
+					fc.set_meta("city", "test_city")
+					fc.set_meta("cache_id", 0)
+					G.match_node.add_child(fc)
+					G.match_node.caches.append(fc)
+					G.match_node._take_cache(fc, sh0[0])
+					var sfe: Dictionary = c.fleet_entry(int(sh0[0].get_meta("fleet_id", -1)))
+					report["salvage_in_hold"] = int((sfe.get("salvage", {}) as Dictionary).get("cores", 0))
+					var cores0: float = float(c.stores.get("cores", 0.0))
+					report["salvage_delivered"] = G.match_node.deliver_salvage(sh0[0], sh0[0])
+					report["salvage_cores_gained"] = float(c.stores.get("cores", 0.0)) - cores0
+					report["salvage_hold_after"] = (sfe.get("salvage", {}) as Dictionary).size()
+					c.world.erase("test_city")
 					sh0[0].cls = "SMALL_DROP_FRIGATE"
 					G.match_node.post_perimeter_guards()
 					report["perimeter_guards"] = G.match_node.ground.occupants.filter(func(o): return is_instance_valid(o) and o.has_meta("perimeter")).size()
@@ -356,6 +383,9 @@ func _physics_process(dt: float) -> void:
 				step = 31
 				_w = t
 		31:
+			if out != "" and _vis != 3:
+				await _vis_shots()
+				return
 			# convoy range: a path from the landing zone right across to the farthest walkable area
 			var gnd2: Node3D = G.match_node.ground
 			if gnd2 and gnd2.areas.size() > 1 and not report.has("cross_path_gap"):
@@ -375,6 +405,40 @@ func _physics_process(dt: float) -> void:
 				report["back_in_orbit"] = not G.match_node.on_surface and G.vessels.filter(func(v): return v.team == 1 and v.kind == "ship").size() > 0
 				_report()
 				step = 99
+
+
+## (Pictures only) the merged city from above, then the commander's RTS view over the
+## landing zone: the fog shading, the ground minimap and its radar rings.
+func _vis_shots() -> void:
+	if t < _vis_t:
+		return
+	var cc: Dictionary = G.match_node.city
+	match _vis:
+		0:
+			_vis_t = t + 1.5
+			_vis = 1
+		1:
+			_vis = 4                                     # (busy: _process keeps coming while we await)
+			if not cc.is_empty():
+				var ctr: Vector3 = cc["center"]
+				var r: float = float(cc["radius"])
+				_look(ctr + Vector3(r * 0.7, r * 0.45, r * 0.7), ctr)
+				await get_tree().process_frame
+				await _shot("11_city")
+			_cam_on = false
+			var cmd: Node = G.commander
+			var sh: Array = G.vessels.filter(func(v): return v.team == 1 and v.kind == "ship")
+			cmd.pivot = sh[0].global_position if not sh.is_empty() else Vector3.ZERO
+			cmd.zoom = 1400.0
+			cmd.pitch = 1.05
+			cmd.interior_forced = 0
+			cmd.cam.make_current()
+			_vis_t = t + 2.5
+			_vis = 2
+		2:
+			_vis = 4
+			await _shot("12_rts_fog_minimap")
+			_vis = 3
 
 
 func _report() -> void:
@@ -407,6 +471,8 @@ func _report() -> void:
 		fails.append("vehicles (deployed %s, path %s)" % [report.get("vehicles_deployed"), report.get("vehicle_path")])
 	if report.has("landed_on") and report.get("minidrop_boarding", 0) < 2:
 		fails.append("mini dropship loading (%s, %s boarding)" % [report.get("minidrop"), report.get("minidrop_boarding")])
+	if report.has("landed_on") and (report.get("salvage_in_hold", 0) != 1 or report.get("salvage_delivered", 0) != 1 			or report.get("salvage_cores_gained", 0.0) < 3.9 or report.get("salvage_hold_after", 1) != 0):
+		fails.append("salvage hold (in hold %s, delivered %s, cores +%s)" % [report.get("salvage_in_hold"), report.get("salvage_delivered"), report.get("salvage_cores_gained")])
 	if report.has("landed_on") and (report.get("depot_crates", 0) < 6 or not "loading" in String(report.get("depot_load", ""))):
 		fails.append("ground cargo (%s / %s)" % [report.get("depot_unload"), report.get("depot_load")])
 	if report.has("landed_on") and report.get("drive_moved", 0.0) < 2.0:
@@ -426,7 +492,7 @@ func _report() -> void:
 	for f in fails:
 		print("CAMPTEST FAIL: ", f)
 	print("CAMPTEST RESULT: %s (%d problems)" % ["PASS" if fails.is_empty() else "FAIL", fails.size()])
-	get_tree().quit(0 if fails.is_empty() else 1)
+	G.quit(0 if fails.is_empty() else 1)
 
 
 # ------------------------------------------------------------------ frame-rate probe (--perf)
@@ -472,4 +538,4 @@ func _perf(tt: float) -> void:
 		for v in G.vehicles:
 			if is_instance_valid(v) and v.team == 4:
 				print("PERF %s y %.1f ground %.1f path %d/%d" % [v.kind, v.global_position.y, G.match_node.ground_y(v.global_position.x, v.global_position.z), v.path_i, v.path.size()])
-		get_tree().quit()
+		G.quit()

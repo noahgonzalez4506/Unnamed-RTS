@@ -39,12 +39,20 @@ func _station(team: int) -> Node:
 	return null
 
 
+## Whether side `team` has found `n` (sensors, radar, or a station seen before): fog.gd.
+static func sees(team: int, n: Node) -> bool:
+	var f = G.match_node.get("fog") if G.match_node else null
+	return f == null or f.sees(team, n)
+
+
 func _nearest_enemy_vessel(from: Node, team: int, max_d: float, ships_only: bool) -> Node:
 	var best: Node = null
 	var bd := max_d
 	for v in G.vessels:
 		if not is_instance_valid(v) or v.destroyed or not G.enemies(team, v.team) or v == from:
 			continue
+		if not sees(team, v):
+			continue                                  # (in the fog: it hasn't been found)
 		if ships_only and v.kind != "ship":
 			continue
 		if v.team == 4 and team != 4:
@@ -93,7 +101,7 @@ func _rival(team: int) -> void:
 			var gb: Node = null
 			var gd := 9000.0
 			for v in G.vessels:
-				if s.is_surface(v) and not v.destroyed and G.enemies(team, v.team):
+				if s.is_surface(v) and not v.destroyed and G.enemies(team, v.team) and sees(team, v):
 					var dd: float = s.global_position.distance_to(v.global_position)
 					if dd < gd:
 						gd = dd
@@ -114,6 +122,8 @@ func _rival(team: int) -> void:
 		var shields_down: bool = tgt.get("shields") != null and tgt.shields <= tgt.max_shields * 0.15
 		if big and s.troops >= 8 and d < 1400.0 and shields_down and randf() < 0.4:
 			s.start_boarding(tgt, "shuttle" if s.can_shuttle(tgt) and randf() < 0.4 else "pods")
+		elif s.troops >= 6 and s.can_eva(tgt) and s.boarding.is_empty() and randf() < 0.3:
+			s.start_boarding(tgt, "eva")             # close enough to cross on thruster packs
 
 
 func _soldiers(team: int) -> int:
@@ -131,7 +141,7 @@ func _pirates() -> void:
 		var intruder: Node = null
 		var bd := pirate_radius + 400.0
 		for v in G.vessels:
-			if is_instance_valid(v) and not v.destroyed and v.kind == "ship" and G.enemies(3, v.team) and v.team != 4:
+			if is_instance_valid(v) and not v.destroyed and v.kind == "ship" and G.enemies(3, v.team) and v.team != 4 and sees(3, v):
 				var d: float = v.global_position.distance_to(pirate_home)
 				if d < bd:
 					bd = d

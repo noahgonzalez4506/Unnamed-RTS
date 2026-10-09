@@ -258,7 +258,7 @@ func _send_snapshot() -> void:
 	for f in G.fighters + G.pods + G.missiles:
 		if is_instance_valid(f):
 			var r: Vector3 = f.global_rotation
-			var kind := 1.0 if f in G.fighters else (4.0 if f in G.missiles else (3.0 if f.has_method("_unload") else (5.0 if f.has_method("_deliver") else 2.0)))
+			var kind := 1.0 if f in G.fighters else (4.0 if f in G.missiles else (3.0 if f.has_method("_unload") else (5.0 if f.has_method("_deliver") else (6.0 if f.get("eva") == true else 2.0))))
 			fs.append_array([f.get_meta("net_id", 0), kind, f.global_position.x, f.global_position.y,
 				f.global_position.z, r.x, r.y, r.z, f.team, f.faction])
 	# characters go out in packet-sized chunks; vessels, craft and effects ride with the first
@@ -433,6 +433,9 @@ func _craft_puppet(kind: int, team: int, faction: int) -> Node3D:
 		p.add_child(m)
 		p.trail = true
 		G.missiles.append(p)
+		return p
+	if kind == 6:                                   # an EVA team: just the people (they come as characters)
+		G.pods.append(p)
 		return p
 	var folder := "ships_X" if team == 4 else ("ships_P" if faction == 3 else "ships_F%d" % faction)
 	var model := "ship_XS_DROPSHIP.glb" if kind == 3 else ("ship_XS_DARTER.glb" if kind == 5 else "ship_XS_POD.glb")

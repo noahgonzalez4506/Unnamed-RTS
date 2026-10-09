@@ -132,6 +132,21 @@ func _process(dt: float) -> void:
 var _age := 0.0
 
 
+## Seats in the model (its *_Seat_n markers, in order); each rider gets the next free one.
+var _seats: Array = []
+
+
+func seat_for(c: Node) -> Node3D:
+	if _seats.is_empty() and model:
+		for n in model.find_children("*_Seat_*", "Node3D", true, false):
+			_seats.append(n)
+		_seats.sort_custom(func(a, b): return int(String(a.name).get_slice("_Seat_", 1)) < int(String(b.name).get_slice("_Seat_", 1)))
+	var i: int = riders.find(c)
+	if i < 0:
+		i = riders.size()
+	return _seats[i] if i < _seats.size() else null
+
+
 ## Point the nose (-Z) along dir.
 func _face(dir: Vector3) -> void:
 	if dir.length() < 0.001:

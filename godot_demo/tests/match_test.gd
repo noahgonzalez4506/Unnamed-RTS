@@ -228,4 +228,4 @@ func _report() -> void:
 	for f in fails:
 		print("SELFTEST FAIL: ", f)
 	print("SELFTEST RESULT: %s (%d problems)" % ["PASS" if fails.is_empty() else "FAIL", fails.size()])
-	get_tree().quit(1 if not fails.is_empty() else 0)
+	G.quit(1 if not fails.is_empty() else 0)

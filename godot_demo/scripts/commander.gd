@@ -27,6 +27,7 @@ var _look_t := 0.0
 var _look_text := ""
 var _help := true
 var _pending := ""             # "board": the next right click picks a pod target
+var _pending_kind := "pods"     # (...and how they go: pods, eva)
 var chase_yaw := 0.0           # piloting: the chase camera
 var chase_pitch := 0.25
 var chase_dist := 0.0
@@ -39,6 +40,80 @@ var _roof_lvl := -1
 var _emp_rect: ColorRect          # EMP static over the first-person view (emp_static)
 var _emp_t := 0.0
 var _emp_len := 0.0
+
+## Fog of war in the 3D view (RTS camera): a full-screen pass that rebuilds each pixel's world
+## position from the depth buffer and darkens what lies outside every eye's sensor radius
+## (eyes: xz position and radius). The sky (nothing drawn there) is left alone.
+const FOG_SHADER := """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, depth_test_disabled, cull_disabled, skip_vertex_transform;
+uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
+uniform vec4 eyes[64];
+uniform int eye_count = 0;
+uniform float strength = 0.55;
+void vertex() {
+	POSITION = vec4(VERTEX.xy, 1.0, 1.0);
+}
+void fragment() {
+	float depth = texture(depth_tex, SCREEN_UV).x;
+	if (depth <= 0.000001) {
+		discard;
+	}
+	vec3 ndc = vec3(SCREEN_UV * 2.0 - 1.0, depth);
+	vec4 view = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
+	view.xyz /= view.w;
+	vec3 world = (INV_VIEW_MATRIX * vec4(view.xyz, 1.0)).xyz;
+	float seen = 0.0;
+	for (int i = 0; i < eye_count; i++) {
+		float d = length(world.xz - eyes[i].xy);
+		seen = max(seen, 1.0 - smoothstep(eyes[i].z * 0.92, eyes[i].z, d));
+	}
+	ALBEDO = vec3(0.0, 0.015, 0.04);
+	ALPHA = (1.0 - seen) * strength;
+}
+"""
+var _fog_fx: MeshInstance3D
+var _fog_t := 0.0
+
+
+## The 3D fog pass follows the player's eyes (fog.gd) a few times a second, in the RTS view only.
+func _fog_frame(dt: float) -> void:
+	var f = G.match_node.get("fog") if G.match_node else null
+	var on: bool = f != null and f.enabled() and G.possessed == null
+	if _fog_fx == null:
+		if not on:
+			return
+		_fog_fx = MeshInstance3D.new()
+		var qm := QuadMesh.new()
+		qm.size = Vector2(2, 2)
+		_fog_fx.mesh = qm
+		_fog_fx.extra_cull_margin = 16384.0
+		_fog_fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var sm := ShaderMaterial.new()
+		var sh := Shader.new()
+		sh.code = FOG_SHADER
+		sm.shader = sh
+		_fog_fx.material_override = sm
+		add_child(_fog_fx)
+	_fog_fx.visible = on
+	if not on:
+		return
+	_fog_t -= dt
+	if _fog_t > 0.0:
+		return
+	_fog_t = 0.25
+	var list: Array = (f.eyes as Array).duplicate()
+	list.sort_custom(func(a, b): return float(a[1]) > float(b[1]))      # the widest first, if over 64
+	var arr: Array = []
+	for e in list.slice(0, 64):
+		var p: Vector3 = e[0]
+		arr.append(Vector4(p.x, p.z, float(e[1]), 0.0))
+	while arr.size() < 64:
+		arr.append(Vector4.ZERO)
+	var mat := _fog_fx.material_override as ShaderMaterial
+	mat.set_shader_parameter("eyes", arr)
+	mat.set_shader_parameter("eye_count", mini(list.size(), 64))
+
 
 const EMP_SHADER := """
 shader_type canvas_item;
@@ -185,6 +260,7 @@ func _inputs() -> void:
 # ------------------------------------------------------------------ per frame
 
 func _process(dt: float) -> void:
+	_fog_frame(dt)
 	var c: Node = G.possessed
 	if c and is_instance_valid(c) and c.state == "alive" and not c.gunning.is_empty():
 		_gun_frame(dt)
@@ -287,15 +363,31 @@ func _fps_frame(_dt: float) -> void:
 	pivot = c.global_position
 
 
-## Riding a boarding pod or shuttle: a chase camera on the craft until it hits.
+## Riding a boarding pod or shuttle: from your seat, looking around the cabin and out (mouse),
+## or (C) a chase camera on the craft until it hits.
+var ride_chase := false
+
+
 func _ride_frame(dt: float) -> void:
 	hud.set_mode_fps(true)
-	var craft: Node3D = G.possessed.riding
+	var c: Node = G.possessed
+	var craft: Node3D = c.riding
 	if not is_instance_valid(craft):
 		return
 	fps_cam.current = true
 	fps_cam.fov = G.settings.get("fov", 85.0)
 	G.set_cut(10000.0)
+	if Input.is_action_just_pressed("crouch"):
+		ride_chase = not ride_chase
+		chase_yaw = 0.0
+		chase_pitch = 0.0 if not ride_chase else 0.25
+	var seat: Node3D = c.get("ride_seat")
+	if not ride_chase and seat != null and is_instance_valid(seat):
+		c.rig.set_first_person(true)
+		var head: Vector3 = c.global_position + c.global_basis.y * 1.15
+		fps_cam.global_transform = Transform3D(c.global_basis * Basis(Vector3.UP, chase_yaw) * Basis(Vector3.RIGHT, -chase_pitch), head)
+		pivot = craft.global_position
+		return
 	var shuttle: bool = craft.has_method("_unload")
 	var dist := 26.0 if shuttle else 14.0
 	var yaw_: float = craft.global_rotation.y + chase_yaw
@@ -536,6 +628,8 @@ func _fps_input(event: InputEvent) -> void:
 	if c.riding:
 		if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			chase_yaw -= event.relative.x * 0.004
+			if not ride_chase:
+				chase_pitch = clampf(chase_pitch - event.relative.y * 0.003, -1.2, 1.2)   # (looking around from the seat)
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		var k: int = event.physical_keycode
@@ -895,7 +989,7 @@ func order_at(pos: Vector2, queue: bool) -> void:
 		var hit := G.ray(from, from + dir * 12000.0, [], G.LAYER_WORLD | G.LAYER_DOOR)
 		var spot: Vector3 = hit.position if not hit.is_empty() else picked.global_position
 		for s in ships:
-			G.match_node.command("board", [G.vessels.find(s), G.vessels.find(picked), "pods", spot])
+			G.match_node.command("board", [G.vessels.find(s), G.vessels.find(picked), _pending_kind, spot])
 		return
 	_pending = ""
 	for s in ships:
@@ -992,15 +1086,16 @@ func _name(u: Node) -> String:
 	return u.display_name if u.get("display_name") != null else "Fighter"
 
 
-func cmd_board() -> void:
+func cmd_board(kind_: String = "pods") -> void:
 	for s in selection:
 		if is_instance_valid(s) and s.has_method("launch_pods") and s.team == TEAM:
 			var t: Node = s.attack_target
+			_pending_kind = kind_
 			if t and is_instance_valid(t) and not t.destroyed:
-				G.match_node.command("board", [G.vessels.find(s), G.vessels.find(t)])
+				G.match_node.command("board", [G.vessels.find(s), G.vessels.find(t), kind_])
 				return
 			_pending = "board"
-			log_event("Right-click an enemy ship or station to send boarding pods", TEAM)
+			log_event("Right-click an enemy ship or station to send %s" % ("an EVA team across" if kind_ == "eva" else "boarding pods"), TEAM)
 			return
 
 
@@ -1144,8 +1239,21 @@ func interact() -> void:
 	if v.kind == "ship" and v.team == c.team and v.get("boarding") != null and not v.boarding.is_empty() \
 			and c.mustered != v and v.near_muster(c):
 		G.match_node.command("join_board", [c.get_meta("net_id", 0), G.vessels.find(v)])
-		log_event("You're going: stay at the %s for launch" % ("pod bay" if v.boarding["kind"] == "pods" else "hangar"), TEAM)
+		log_event("You're going: stay at the %s for launch" % {"pods": "pod bay", "eva": "airlock"}.get(v.boarding["kind"], "hangar"), TEAM)
 		return
+	if c.eva_cycle.is_empty() and not G.is_client():
+		if c.eva_out:
+			var ne: Array = c.eva_entry_near()
+			if not ne.is_empty():
+				var cut: bool = G.enemies(c.team, ne[0].team)
+				c.eva_begin("cut" if cut else "in", ne[0], ne[1])
+				log_event("Cutting through the %s's hull..." % ne[0].display_name if cut else "Cycling the airlock...", TEAM)
+			return
+		var ex: Array = c.eva_exit_entry()
+		if not ex.is_empty():
+			c.eva_begin("out", v, ex)
+			log_event("Cycling the airlock: inner door shut, venting... (%s s of suit air)" % int(c.suit_air), TEAM)
+			return
 	# on a client the host does the same for our body there (defusing, doors, charges, the
 	# armory); we run it here too so our own magazines and kit match
 	if G.is_client():
@@ -1206,6 +1314,14 @@ func _look_prompt() -> String:
 		var lk: String = ("LOCK %s  ·  " % pv.lock.display_name) if pv.get("lock") and is_instance_valid(pv.lock) else ""
 		var aim: String = ("aiming at %s  ·  " % t.display_name) if t and t != pv else ""
 		return lk + aim + "T lock  ·  M missiles  ·  B pods  ·  N shuttle  ·  1 attack  2 form on me  3 hold  4 board  ·  E leave"
+	if not c.eva_cycle.is_empty():
+		return "%s  %d s" % ["Cutting through the hull" if c.eva_cycle["kind"] == "cut" else "Cycling the airlock", ceili(c.eva_cycle["t"])]
+	if c.eva_out:
+		var ne: Array = c.eva_entry_near()
+		var how := "EVA  ·  WASD thrust where you look  ·  Space up  C down  ·  V burn  ·  suit air %d s" % int(c.suit_air)
+		if not ne.is_empty():
+			return ("E  cut in through the %s's hull  ·  " if G.enemies(c.team, ne[0].team) else "E  cycle the airlock into the %s  ·  ") % ne[0].display_name + how
+		return how
 	var nv := _vehicle_near(c)
 	if nv:
 		return "E  drive the %s" % nv.display_name
@@ -1230,6 +1346,8 @@ func _look_prompt() -> String:
 	var med: String = c.medical_prompt()
 	if med != "":
 		return med
+	if not c.eva_exit_entry().is_empty():
+		return "E  go out the %s (EVA, %d s of suit air)" % ["airlock" if String(c.eva_exit_entry()[3]).contains("Airlock") else "EVA hatch", int(c.suit_air)]
 	if v.elevator_at(c.position) >= 0:
 		return "E  elevator"
 	if v.team == c.team:
@@ -1344,6 +1462,14 @@ func _update_labels() -> void:
 				lab.global_position = v.global_position + Vector3.UP * 30.0
 			else:
 				lab.visible = false
+			continue
+		var gh: Dictionary = G.match_node.fog.ghost_of(v) if G.match_node and G.match_node.fog else {}
+		if not gh.is_empty():
+			# out of sight: as it was when last seen
+			var gt: int = int(gh["team"])
+			lab.modulate = Color(G.team_color(gt) if gt != 4 else Color(0.8, 0.45, 1.0), 0.6)
+			lab.text = "%s%s  (last seen %ds ago)" % [v.display_name, "  (wreck)" if gh.get("destroyed", false) else "",
+				int(G.time - float(gh["t"]))]
 			continue
 		if v.has_meta("job") and not v.destroyed:
 			lab.text = "JOB ▸ " + lab.text

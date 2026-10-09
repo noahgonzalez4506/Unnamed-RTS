@@ -81,6 +81,7 @@ static func _block(parent: Node3D, size: Vector3, pos: Vector3, mat: Material, s
 ## walks), buildings line both sides at random sizes and heights, some collapsed to rubble.
 ## Salvage caches lie in the streets. Then whoever's there: outlaws or the infection.
 static func _city(m: Node, L: Dictionary, P: Dictionary, r: RandomNumberGenerator) -> void:
+	var first_child: int = m.get_child_count()           # everything after this is the city (merged below)
 	var gy: float = SURFACE.GROUND_Y - 2.0
 	var center: Vector3 = L["city_site"]["center"]
 	center.y = 0.0
@@ -273,6 +274,7 @@ static func _city(m: Node, L: Dictionary, P: Dictionary, r: RandomNumberGenerato
 		cl.position = Vector3(0, 3, 0)
 		cache.add_child(cl)
 		m.caches.append(cache)
+	merge_static(m, m.get_children().slice(first_child))
 	# who's here: the infection, outlaw scavengers (infantry with 1-3 of their MRAPs), or nobody
 	var roll := r.randf()
 	var cc := Vector3(center.x, SURFACE.GROUND_Y + SURFACE.height(P, L, center.x, center.z), center.z)
@@ -563,6 +565,78 @@ static func _cover(m: Node, b: Node3D, local_p: Vector3, low: bool, toward: Vect
 	var wp: Vector3 = b.to_global(local_p)
 	var wd: Vector3 = (b.global_basis * toward).normalized()
 	m.ground_cover.append([wp, low, wd])
+
+
+## A city is thousands of separate boxes (walls, slabs, rubble, lamps, cars): one draw call
+## each. Fold the static ones under `roots` into a few meshes per 96 m cell, one per material,
+## cutaway layer and shadow setting, parented to `m`. Small props (under 1.5 m) also stop being
+## drawn past 260 m and cast no shadow. Collision shapes stay where they are; salvage caches and
+## anything with a script are left alone. Returns how many mesh instances were folded.
+static func merge_static(m: Node, roots: Array, cell: float = 96.0) -> int:
+	var layer_of := {}                                    # mesh instance -> cutaway level
+	if "roofs" in m:
+		for rf in m.roofs:
+			layer_of[rf[0]] = int(rf[1])
+	var groups := {}                                      # key -> [material, level, shadow, small, [[mesh, xform]]]
+	var folded: Array = []
+	var gone := {}                                        # (folded, as a set)
+	var stack: Array = roots.duplicate()
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if not is_instance_valid(n) or n.has_meta("cache") or (n.get_script() != null and n != m):
+			continue
+		for ch in n.get_children():
+			stack.append(ch)
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null or not mi.visible or mi.mesh.get_surface_count() != 1:
+			continue
+		var xf := Transform3D.IDENTITY                    # relative to m (it may not be in the tree yet)
+		var p: Node = mi
+		while p != null and p != m:
+			if p is Node3D:
+				xf = (p as Node3D).transform * xf
+			p = p.get_parent()
+		if p != m:
+			continue
+		var mat: Material = mi.material_override if mi.material_override else mi.mesh.surface_get_material(0)
+		var size: Vector3 = mi.mesh.get_aabb().size * xf.basis.get_scale()
+		var small: bool = maxf(size.x, maxf(size.y, size.z)) < 1.5
+		var lvl: int = int(layer_of.get(mi, 0))
+		var shadow: int = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if small else int(mi.cast_shadow)
+		var c: Vector3 = xf.origin
+		var key := "%d_%d_%d_%d_%d_%s" % [int(floor(c.x / cell)), int(floor(c.z / cell)), mat.get_instance_id() if mat else 0, lvl, shadow, small]
+		if not groups.has(key):
+			groups[key] = [mat, lvl, shadow, small, []]
+		(groups[key][4] as Array).append([mi.mesh, xf])
+		folded.append(mi)
+		gone[mi] = true
+	for key in groups:
+		var g: Array = groups[key]
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for it in g[4]:
+			st.append_from(it[0], 0, it[1])
+		var am: ArrayMesh = st.commit()
+		if g[0]:
+			am.surface_set_material(0, g[0])
+		var out := MeshInstance3D.new()
+		out.mesh = am
+		out.cast_shadow = g[2]
+		if g[3]:
+			out.visibility_range_end = 260.0
+			out.visibility_range_end_margin = 30.0
+			out.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		m.add_child(out)
+		if int(g[1]) > 0 and "roofs" in m:
+			m.roofs.append([out, int(g[1])])
+	if "roofs" in m:
+		m.roofs = m.roofs.filter(func(rf): return not gone.has(rf[0]))
+	for mi in folded:
+		mi.get_parent().remove_child(mi)
+		mi.free()
+	G.stat("city_meshes_folded", folded.size())
+	G.stat("city_meshes_merged", groups.size())
+	return folded.size()
 
 
 ## Floors and roofs the commander's cutaway peels off (level 1: upper floor, 2: roof).

@@ -13,10 +13,16 @@ var dud := false                  # hit something before arming: no blast
 var _arm := 0.0                   # metres still to fly before the shell arms
 var _dmg := 85.0
 var _radius := 4.0
+var team := 0                     # the thrower's: its friends keep clear until it goes off
+var _to := Vector3.INF            # where it was thrown (it's headed there until it first lands)
+var _landed := false
 
 
 func launch(from: Vector3, to: Vector3, who: Node, fac: int) -> void:
 	thrower = who
+	team = int(who.get("team")) if who and who.get("team") != null else 0
+	_to = to
+	G.dangers.append(self)
 	global_position = from
 	var item := "item_F1_FragGrenade" if fac == 1 else "item_F2_PlasmaGrenade"
 	mesh = load("res://models/items/%s.glb" % item).instantiate()
@@ -31,6 +37,19 @@ func launch(from: Vector3, to: Vector3, who: Node, fac: int) -> void:
 	vel = d / t + Vector3.UP * 0.5 * 9.8 * t
 	if fac == 2 and not emp:
 		fuse = 2.0
+
+
+## Where friendlies should keep away from: where it's headed while in the air, then where it lies.
+func danger_point() -> Vector3:
+	return global_position if _landed or _to == Vector3.INF else _to
+
+
+func danger_radius() -> float:
+	return 7.5 if emp else 6.0                   # (frag blast 5 m, EMP pulse 7 m, plus a step)
+
+
+func _exit_tree() -> void:
+	G.dangers.erase(self)
 
 
 ## Launch a 40 mm shell from `from` along `dir` (stats: the "GLShell" item in the data).
@@ -136,6 +155,7 @@ func _physics_process(dt: float) -> void:
 	if not hit.is_empty():
 		vel = vel.bounce(hit.normal) * 0.35
 		nxt = hit.position + hit.normal * 0.05
+		_landed = true
 	global_position = nxt
 	mesh.rotation += Vector3(7, 5, 3) * dt
 	fuse -= dt

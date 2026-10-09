@@ -221,6 +221,16 @@ func _ready() -> void:
 		add_child(load("res://tests/squad_test.gd").new())
 	elif "--grenadiertest" in args:
 		add_child(load("res://tests/grenadier_test.gd").new())
+	elif "--fftest" in args:
+		add_child(load("res://tests/ff_test.gd").new())
+	elif "--hitchtest" in args:
+		add_child(load("res://tests/hitch_test.gd").new())
+	elif "--fogtest" in args:
+		add_child(load("res://tests/fog_test.gd").new())
+	elif "--ridetest" in args:
+		add_child(load("res://tests/ride_test.gd").new())
+	elif "--evatest" in args:
+		add_child(load("res://tests/eva_test.gd").new())
 	elif "--breachtest" in args:
 		add_child(load("res://tests/breach_test.gd").new())
 	elif "--opstest" in args:
@@ -698,7 +708,8 @@ func run_command(team: int, what: String, args: Array, peer: int = 0) -> void:
 					G.say("%s already has a boarding party mustering" % s3.display_name, team)
 				elif not s3.start_boarding(t3, kind_):
 					G.say("%s can't board %s: %s" % [s3.display_name, t3.display_name, "the shuttle needs a hangar, 4+ boarders, range 2.6 km and is on a 60 s cooldown"
-						if kind_ == "shuttle" else "needs to be within 1.5 km, with 4+ boarders aboard"], team)
+						if kind_ == "shuttle" else ("an EVA crossing needs an airlock, 4+ boarders and under %d m of open space between the hulls" % int(s3.EVA_RANGE)
+						if kind_ == "eva" else "needs to be within 1.5 km, with 4+ boarders aboard")], team)
 		"missiles":
 			var s6: Node = V.call(args[0])
 			var t6: Node = V.call(args[1])
@@ -856,7 +867,9 @@ func squad_command(c: Node, op: String, p: Vector3) -> void:
 					if dd < bd and dd < 25.0:
 						bd = dd
 						best = m
-			if best:
+			if best and best._friend_in_blast(v.to_global(p), 6.0):
+				G.say("%s: can't throw, friendlies by the aim point" % best.display, c.team)
+			elif best:
 				best._throw_grenade(v.to_global(p))
 				G.say("%s: frag out!" % best.display, c.team)
 			else:
@@ -1093,6 +1106,9 @@ func _campaign_ready(t0: int) -> void:
 		add_child(load("res://tests/campaign_test.gd").new())
 
 
+var _haul_t := 10.0
+
+
 func _campaign_tick(dt: float) -> void:
 	if G.is_client() or _jumping:
 		return
@@ -1164,8 +1180,29 @@ func _campaign_tick(dt: float) -> void:
 			continue
 		for v in G.vessels:
 			if v.team == 1 and v.kind == "ship" and not v.destroyed and Vector2(v.global_position.x - cache.global_position.x, v.global_position.z - cache.global_position.z).length() < (60.0 if on_surface else 160.0):
-				_take_cache(cache)
+				_take_cache(cache, v)
 				break
+	# salvage in a hold pays out at one of our stations (within 1.5 km)
+	if not on_surface:
+		for v in G.vessels:
+			if v.team != 1 or v.kind != "ship" or v.destroyed or not v.has_meta("fleet_id"):
+				continue
+			if (c.fleet_entry(int(v.get_meta("fleet_id"))).get("salvage", {}) as Dictionary).is_empty():
+				continue
+			for st in G.vessels:
+				if st.team == 1 and st.kind == "station" and not st.destroyed and st.global_position.distance_to(v.global_position) < 1500.0:
+					deliver_salvage(v, st)
+					break
+	# AUTO HAUL: a landed supply ship loads newly secured salvage by itself
+	_haul_t -= 1.0
+	if on_surface and _haul_t <= 0.0:
+		_haul_t = 10.0
+		for v in G.vessels:
+			if DEPOT.is_hauler(v) and v.team == 1 and not v.destroyed and v.has_meta("fleet_id") \
+					and c.fleet_entry(int(v.get_meta("fleet_id"))).get("auto_haul", false):
+				var msg: String = DEPOT.load_cargo(self, v, true)
+				if msg != "":
+					G.say(msg, 1)
 	# ships ordered to jump: through the gate when the first one gets there
 	for v in G.vessels:
 		if v.team != 1 or v.kind != "ship" or v.destroyed or not v.has_meta("jump_to"):
@@ -1180,7 +1217,13 @@ func _campaign_tick(dt: float) -> void:
 		if v.team == 1 and v.kind == "ship" and not v.destroyed and v.has_meta("fleet_id"):
 			var e: Dictionary = c.fleet_entry(int(v.get_meta("fleet_id")))
 			if not e.is_empty():
-				load("res://scripts/campaign/cargo_view.gd").refresh(v, e.get("cargo", {}))
+				var shown: Dictionary = (e.get("cargo", {}) as Dictionary).duplicate()
+				var sv := 0
+				for kind in e.get("salvage", {}):
+					sv += int(e["salvage"][kind])
+				if sv > 0:
+					shown["salvage"] = sv * 10                   # (a crate each)
+				load("res://scripts/campaign/cargo_view.gd").refresh(v, shown)
 				if v.cls == "SMALL_SUPPORT":
 					load("res://scripts/campaign/bays.gd").refresh_mech_bay(v, ship_vehicles(v).count("mech"))
 				if v.cls == "SMALL_DROP_FRIGATE" and v.get_meta("md_n", -1) != int(e.get("minidrops", 0)):
@@ -1357,9 +1400,49 @@ func _reload_world(title: String, sub: String) -> void:
 	get_tree().reload_current_scene()
 
 
-func _take_cache(cache: Node3D) -> void:
+## A salvage cache recovered. Into `ship`'s hold when a fleet ship takes it (it pays out when
+## that ship reaches one of our stations: deliver_salvage); straight into stores otherwise.
+func _take_cache(cache: Node3D, ship: Node = null) -> void:
 	var c = G.campaign
 	var kind: String = cache.get_meta("cache")
+	var e: Dictionary = c.fleet_entry(int(ship.get_meta("fleet_id", -1))) if ship and is_instance_valid(ship) else {}
+	if not e.is_empty():
+		var hold: Dictionary = e.get("salvage", {})
+		hold[kind] = int(hold.get(kind, 0)) + 1
+		e["salvage"] = hold
+		G.say("Salvage (%s) aboard %s: fly it to one of your stations" % [kind, ship.display_name], 1)
+	else:
+		salvage_reward(kind)
+	var key: String = cache.get_meta("city")
+	var w: Dictionary = c.world.get(key, {})
+	var taken: Array = w.get("taken", [])
+	taken.append(int(cache.get_meta("cache_id")))
+	w["taken"] = taken
+	c.world[key] = w
+	G.stat("caches_taken")
+	caches.erase(cache)
+	cache.queue_free()
+
+
+## A ship of ours near station `st` hands over the salvage in its hold.
+func deliver_salvage(ship: Node, st: Node) -> int:
+	var e: Dictionary = G.campaign.fleet_entry(int(ship.get_meta("fleet_id", -1)))
+	var hold: Dictionary = e.get("salvage", {})
+	var n := 0
+	for kind in hold:
+		for k in int(hold[kind]):
+			salvage_reward(String(kind))
+			n += 1
+	if n > 0:
+		e.erase("salvage")
+		G.say("%s delivered %d salvage load%s to %s" % [ship.display_name, n, "" if n == 1 else "s", st.display_name], 1)
+		G.stat("salvage_delivered", n)
+	return n
+
+
+## What one salvage cache of `kind` is worth, into the company's stores.
+func salvage_reward(kind: String) -> void:
+	var c = G.campaign
 	var r: Dictionary = c.stores
 	match kind:
 		"cores":
@@ -1380,15 +1463,6 @@ func _take_cache(cache: Node3D) -> void:
 			if not done:
 				c.credits += 1500
 				G.say("Salvage recovered: research data, sold for 1500 cr", 1)
-	var key: String = cache.get_meta("city")
-	var w: Dictionary = c.world.get(key, {})
-	var taken: Array = w.get("taken", [])
-	taken.append(int(cache.get_meta("cache_id")))
-	w["taken"] = taken
-	c.world[key] = w
-	G.stat("caches_taken")
-	caches.erase(cache)
-	cache.queue_free()
 
 
 # ------------------------------------------------------------------ on the ground

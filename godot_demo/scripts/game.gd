@@ -78,6 +78,7 @@ var _sphere: SphereMesh
 
 
 var sfx: Node                  # sound effects (sfx.gd)
+var dangers: Array = []        # live grenades and breaching rounds: friendly AI keeps clear (danger_for)
 
 
 func _ready() -> void:
@@ -99,6 +100,14 @@ func _ready() -> void:
 	_sphere.rings = 6
 
 
+## Quit the game: silence the sound first and give the audio thread a moment to drop what it
+## was mixing (quitting mid-sound leaks the playbacks: "ObjectDB instances leaked at exit").
+func quit(code: int = 0) -> void:
+	if sfx:
+		sfx.silence()
+	get_tree().create_timer(0.15, true, false, true).timeout.connect(func(): get_tree().quit(code))
+
+
 func stat(k: String, n: int = 1) -> void:
 	if not profiling and k.begins_with("us_"):
 		return
@@ -107,6 +116,7 @@ func stat(k: String, n: int = 1) -> void:
 
 func reset() -> void:
 	stats.clear()
+	dangers.clear()
 	vessels.clear()
 	characters.clear()
 	fighters.clear()
@@ -226,6 +236,27 @@ func load_settings() -> void:
 			settings[k] = cf.get_value("game", k)
 
 
+## Alt-tab / minimise in single player: the game waits (so it doesn't run on unseen and
+## come back to a pile of catch-up work); it carries on when the window has focus again.
+## Settings "alt_tab_pause" false keeps it running. A multiplayer host never stops.
+var _focus_paused := false
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		# (not in tests and picture runs: they run in the background while you use other windows)
+		if match_node and not (network and network.active) and settings.get("alt_tab_pause", true) \
+				and not get_tree().paused and OS.get_cmdline_user_args().is_empty():
+			get_tree().paused = true
+			_focus_paused = true
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		if _focus_paused:
+			_focus_paused = false
+			var pm = commander.get("pause_menu") if commander else null
+			if not (pm and pm.visible):
+				get_tree().paused = false
+
+
 func save_settings() -> void:
 	var cf := ConfigFile.new()
 	for k in settings:
@@ -254,7 +285,7 @@ func _json(path: String) -> Dictionary:
 
 func _process(dt: float) -> void:
 	var _t0 := Time.get_ticks_usec()
-	_fx_tick(dt)
+	_fx_tick(minf(dt, 0.25))                     # (a hitch doesn't fire every clock-driven timer at once)
 	stat("us_fx", Time.get_ticks_usec() - _t0)
 
 
@@ -485,6 +516,19 @@ func explosion(pos: Vector3, size: float, c: Color = Color(1.0, 0.55, 0.15)) -> 
 
 
 ## Damage every character within `radius` of `pos` (grenades, charges).
+## The live grenade or breaching round (thrown by someone not hostile to `team_`) whose blast
+## would reach world point `p` (plus `margin`), with nothing solid in between, or null.
+func danger_for(team_: int, p: Vector3, margin: float = 0.0) -> Node:
+	for d in dangers:
+		if not is_instance_valid(d) or enemies(team_, int(d.team)):
+			continue
+		var dp: Vector3 = d.danger_point()
+		if p.distance_to(dp) < float(d.danger_radius()) + margin \
+				and ray(dp + Vector3.UP * 0.3, p + Vector3.UP * 1.0, [], LAYER_WORLD | LAYER_DOOR).is_empty():
+			return d
+	return null
+
+
 func blast(pos: Vector3, radius: float, damage: float, attacker: Node) -> void:
 	explosion(pos, radius * 0.8)
 	for v in vessels:

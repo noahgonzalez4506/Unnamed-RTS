@@ -7,6 +7,7 @@ extends Node
 ##   comes close, and overgrown derelicts fire spores at clean ships nearby
 
 const POD := preload("res://scripts/pod.gd")
+const AI := preload("res://scripts/ai.gd")
 const MAX_HIVES := 2
 
 var t := 0.0
@@ -52,6 +53,8 @@ func _nearest_enemy(s: Node, from: Vector3, radius: float, ships_only: bool = fa
 	for v in G.vessels:
 		if not is_instance_valid(v) or v.destroyed or v == s or not G.enemies(s.team, v.team):
 			continue
+		if not AI.sees(int(s.team), v):
+			continue                                     # (in the fog: it hasn't been found)
 		if ships_only and v.kind != "ship":
 			continue
 		if v.get("drifting") == true and s.team != 4:

@@ -107,7 +107,7 @@ func _process(dt: float) -> void:
 			i += 1
 		return
 	if i >= steps.size():
-		get_tree().quit()
+		G.quit()
 		return
 	steps[i][2].call()
 	wait = steps[i][0]

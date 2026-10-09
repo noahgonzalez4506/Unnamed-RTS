@@ -64,4 +64,4 @@ func _ready() -> void:
 		await get_tree().process_frame
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(OS.get_cmdline_user_args()[-1])
-	get_tree().quit()
+	G.quit()

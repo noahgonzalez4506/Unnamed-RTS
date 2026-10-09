@@ -44,4 +44,4 @@ func _process(dt: float) -> void:
 		for k in ks:
 			if String(k).begins_with("us_"):
 				print("PERF %-20s %.2f ms per frame" % [k, G.stats[k] / 1000.0 / float(Engine.get_physics_frames())])
-		get_tree().quit()
+		G.quit()

@@ -97,8 +97,10 @@ static func unload(m: Node, s: Node) -> String:
 
 
 ## LOAD CARGO: the depot's crates near the ramp and every salvage cache our troops have
-## secured are hauled up the ramp into the front bay.
-static func load_cargo(m: Node, s: Node) -> String:
+## secured are hauled up the ramp into the front bay. Crates go back into stores; salvage rides
+## in the ship's hold until it reaches one of our stations. `salvage_only` (AUTO HAUL) leaves
+## the depot alone and says nothing when there's nothing to load.
+static func load_cargo(m: Node, s: Node, salvage_only: bool = false) -> String:
 	if not m.on_surface or m.ground == null:
 		return "Land first"
 	if not is_hauler(s):
@@ -108,7 +110,7 @@ static func load_cargo(m: Node, s: Node) -> String:
 	var hauled: Array = []
 	var gains := {}
 	for b in crates.duplicate():
-		if not is_instance_valid(b) or b.global_position.distance_to(foot) > HAUL_DEPOT:
+		if salvage_only or not is_instance_valid(b) or b.global_position.distance_to(foot) > HAUL_DEPOT:
 			continue
 		var rec: Array = b.get_meta("rec")
 		var left: float = float(rec[3]) / CHARGE
@@ -119,13 +121,16 @@ static func load_cargo(m: Node, s: Node) -> String:
 		hauled.append(b)
 	var salvaged := 0
 	for cache in m.caches.duplicate():
-		if not is_instance_valid(cache):
+		if not is_instance_valid(cache) or cache.has_meta("hauling"):
 			continue
 		var d: float = cache.global_position.distance_to(foot)
-		if d < HAUL_DEPOT or (cache.has_meta("secured") and d < HAUL_SECURED):
+		if (d < HAUL_DEPOT and not salvage_only) or (cache.has_meta("secured") and d < HAUL_SECURED):
+			cache.set_meta("hauling", true)
 			hauled.append(cache)
 			salvaged += 1
 	if hauled.is_empty():
+		if salvage_only:
+			return ""
 		return "Nothing to load: put a depot down (UNLOAD CARGO), or have troops secure salvage within %d m" % int(HAUL_SECURED)
 	BAYS.ramp_down(s)
 	var r: Dictionary = G.campaign.stores
@@ -140,14 +145,15 @@ static func load_cargo(m: Node, s: Node) -> String:
 		if n.has_meta("cache"):
 			tw.tween_callback(func():
 				if is_instance_valid(n):
-					m._take_cache(n))
+					m._take_cache(n, s if is_instance_valid(s) else null))
 		else:
 			tw.tween_callback(n.queue_free)
 		i += 1
 	s.get_tree().create_timer(12.0).timeout.connect(func():
 		if is_instance_valid(s):
 			BAYS.ramp_up(s))
-	return "%s: loading %d crates and %d salvage caches into the front bay" % [s.display_name, hauled.size() - salvaged, salvaged]
+	return "%s: loading %d crates and %d salvage caches into the front bay%s" % [s.display_name, hauled.size() - salvaged, salvaged,
+		" (salvage rides in the hold until you reach one of your stations)" if salvaged > 0 else ""]
 
 
 ## Once a second: depots rearm troops and patch vehicles; troops standing on salvage secure it.

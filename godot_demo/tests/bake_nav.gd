@@ -82,4 +82,4 @@ func _ready() -> void:
 		print("NAV %-18s %5d ms  polys %5d  path segments through walls: %d of %d" % [j[1], Time.get_ticks_msec() - t0,
 			nm.get_polygon_count(), bad, n])
 		v.queue_free()
-	get_tree().quit()
+	G.quit()

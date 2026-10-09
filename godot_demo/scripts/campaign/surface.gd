@@ -226,6 +226,7 @@ static func _ground(m: Node, L: Dictionary) -> Dictionary:
 	arr[Mesh.ARRAY_VERTEX] = verts
 	arr[Mesh.ARRAY_COLOR] = colors
 	arr[Mesh.ARRAY_NORMAL] = null
+	_minimap_image(m, verts, colors, sea_h, cols[0], AREA * 1.3)
 	var am := ArrayMesh.new()
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 	var st2 := SurfaceTool.new()
@@ -266,6 +267,35 @@ static func _ground(m: Node, L: Dictionary) -> Dictionary:
 		m.add_child(wm)
 	P["sea_h"] = sea_h
 	return P
+
+
+## The minimap's backdrop for this landing zone: the terrain's own colours from above, water
+## where the sea covers it, a little hill shading. Kept on the match as meta "ground_map"
+## (an ImageTexture covering +-half metres).
+static func _minimap_image(m: Node, verts: PackedVector3Array, colors: PackedColorArray, sea_h: float, water: Color, half: float) -> void:
+	const N := 160
+	var img := Image.create(N, N, false, Image.FORMAT_RGB8)
+	var hgt := PackedFloat32Array()
+	hgt.resize(N * N)
+	hgt.fill(-1.0e9)
+	for k in verts.size():
+		var v := verts[k]
+		var px := clampi(int((v.x / half * 0.5 + 0.5) * N), 0, N - 1)
+		var pz := clampi(int((v.z / half * 0.5 + 0.5) * N), 0, N - 1)
+		var col: Color = colors[k]
+		if v.y < sea_h:
+			col = water.lerp(Color(0.05, 0.1, 0.2), clampf((sea_h - v.y) / 60.0, 0.0, 0.6))
+		img.set_pixel(px, pz, col)
+		hgt[pz * N + px] = maxf(hgt[pz * N + px], v.y)
+	for z in N:                                          # light from the north-west
+		for x in N:
+			var h0: float = hgt[z * N + x]
+			var h1: float = hgt[maxi(z - 1, 0) * N + maxi(x - 1, 0)]
+			if h0 > -1.0e8 and h1 > -1.0e8 and h0 > sea_h:
+				var c: Color = img.get_pixel(x, z)
+				img.set_pixel(x, z, c.lightened(clampf((h0 - h1) / 40.0, 0.0, 0.25)) if h0 >= h1 else c.darkened(clampf((h1 - h0) / 40.0, 0.0, 0.3)))
+	m.set_meta("ground_map", ImageTexture.create_from_image(img))
+	m.set_meta("ground_map_half", half)
 
 
 # ------------------------------------------------------------------ trees, bushes, grass, rocks

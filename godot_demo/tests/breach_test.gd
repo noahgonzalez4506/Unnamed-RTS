@@ -146,4 +146,4 @@ func _report() -> void:
 	print("BREACHTEST ", report)
 	var ok: bool = report.get("launched", 0) > 0 and report["nose_err_deg"] < 20.0 and avg_tight < 1.0 and report["boarders"] > 0
 	print("BREACHTEST RESULT: ", "PASS" if ok else "FAIL")
-	get_tree().quit(0 if ok else 1)
+	G.quit(0 if ok else 1)

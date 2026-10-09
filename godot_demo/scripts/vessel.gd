@@ -1274,9 +1274,142 @@ func _retreat_check() -> void:
 
 ## A wrecked room is back in service once its repair job is done.
 func room_repaired(job: Dictionary) -> void:
+	if job.has("seal") and int(job["seal"]) < openings.size() 			and float(openings[int(job["seal"])]["at"]) == float(job.get("at", -1.0)):   # (not a hole cut again since)
+		openings[int(job["seal"])]["sealed"] = true
+		G.say("%s: hull breach patched, the compartment is repressurising" % display_name, team)
 	if job.has("room"):
 		rooms_down.erase(job["room"])
 		G.say("%s: the %s is back in service" % [display_name, job["room"]], team)
+
+
+# ------------------------------------------------------------------ air: hull breaches and venting
+## Every hull breach (a pod's or shuttle's cut, an EVA team's, a charge on an airlock's outer
+## door) is an opening to space in the compartment behind it. While nothing seals it (a pod or
+## docked shuttle clamped over the hole, or the engineers' patch: a repair job), that
+## compartment's air drains: loose people are pulled toward the hole for the first seconds,
+## and anyone breathing from their suit (suit_air) starts to run out. Patched, it refills.
+
+var openings: Array = []           # {pos (local), zone (index), sealed, at (G.time), pattern (what was cut)}
+var _vent_t := 0.0
+const AIR_DRAIN := 0.5             # air per second through an open hole (1 = full)
+const AIR_REFILL := 0.08
+const PULL_FOR := 4.0              # seconds a fresh hole drags people toward it
+
+
+func breach(pattern: String) -> void:
+	for o in openings:
+		if o.get("pattern", "") == pattern:                # cut open again where it was patched
+			if o["sealed"]:
+				o["sealed"] = false
+				o["at"] = G.time
+				o["job"] = false
+			super(pattern)
+			return
+	var parts: Array = find_parts(pattern)
+	var c := Vector3.ZERO
+	var n := 0
+	for p in parts:
+		if p is MeshInstance3D:
+			c += to_local((p as MeshInstance3D).global_transform * (p as MeshInstance3D).get_aabb().get_center())
+			n += 1
+		elif p is Node3D:
+			c += to_local((p as Node3D).global_position)
+			n += 1
+	super(pattern)
+	if n > 0 and not zones.is_empty():
+		_open_hull(c / n, pattern)
+
+
+## A hole in the hull at local `p`: the compartment behind it starts to vent.
+func _open_hull(p: Vector3, pattern: String = "") -> void:
+	if G.match_node and G.match_node.get("on_surface") == true:
+		return                                             # (down on a world there's air outside)
+	var zi := zone_index_near(p)
+	if zi < 0:
+		return
+	openings.append({"pos": p, "zone": zi, "sealed": false, "at": G.time, "pattern": pattern})
+	G.stat("hull_openings")
+
+
+## The compartment containing local point `p`, or the nearest one (a hull panel sits on its edge).
+func zone_index_near(p: Vector3) -> int:
+	var best := -1
+	var bd := 1.0e9
+	for i in zones.size():
+		var z: Dictionary = zones[i]
+		var d: Vector3 = ((p - z["center"]).abs() - z["half"]).max(Vector3.ZERO)
+		if d.length() < bd:
+			bd = d.length()
+			best = i
+	return best if bd < 6.0 else -1
+
+
+## Air in the compartment at local `p` (1 = full; outside every compartment: full).
+func air_at(p: Vector3) -> float:
+	var z: Dictionary = zone_at(p)
+	return float(z.get("air", 1.0)) if not z.is_empty() else 1.0
+
+
+## The centre of the nearest compartment with good air (local), or INF.
+func safe_air_point(p: Vector3) -> Vector3:
+	var good: Array = zones.filter(func(z): return float(z.get("air", 1.0)) > 0.9)
+	good.sort_custom(func(a, b): return (a["center"] as Vector3).distance_to(p) < (b["center"] as Vector3).distance_to(p))
+	for z in good.slice(0, 6):
+		var q: Vector3 = snap_local(z["center"])
+		if air_at(q) > 0.9 and q.distance_to(p) > 2.0:   # (a centre off the deck can snap back into the vented room)
+			return q
+	return Vector3.INF
+
+
+func _opening_open(o: Dictionary) -> bool:
+	if o["sealed"]:
+		return false
+	var w: Vector3 = to_global(o["pos"])
+	for k in G.pods:                                       # a boarding shuttle docked over it
+		if is_instance_valid(k) and k.has_method("_unload") and int(k.get("stage")) >= 3 and k.global_position.distance_to(w) < 12.0:
+			return false
+	for ch in get_children():                              # a pod clamped in the hole
+		if ch.has_method("_impact") and int(ch.get("stage")) >= 2 and (ch as Node3D).global_position.distance_to(w) < 8.0:
+			return false
+	return true
+
+
+func _vent_tick(dt: float) -> void:
+	var venting := {}
+	for i in openings.size():
+		var o: Dictionary = openings[i]
+		if _opening_open(o):
+			venting[int(o["zone"])] = o
+			if not o.get("job", false) and get("repairs") != null:
+				o["job"] = true                            # the engineers will come and patch it
+				get("repairs").append({"pos": snap_local(o["pos"]), "amount": 700.0, "seal": i, "at": o["at"]})
+				G.say("%s: hull breach, the %s is venting!" % [display_name, zones[int(o["zone"])].get("name", "compartment")], team)
+				raise_alarm(o["pos"])
+	for zi in zones.size():
+		var z: Dictionary = zones[zi]
+		var air: float = float(z.get("air", 1.0))
+		if venting.has(zi):
+			z["air"] = maxf(0.0, air - AIR_DRAIN * dt)
+		elif air < 1.0:
+			z["air"] = minf(1.0, air + AIR_REFILL * dt)
+	if venting.is_empty() and openings.is_empty():
+		return
+	for c in occupants:
+		if not is_instance_valid(c) or c.state == "dead" or c.get("suit_air") == null:
+			continue
+		var zi2 := zone_index_near(c.position)
+		if zi2 < 0:
+			continue
+		var air2: float = float(zones[zi2].get("air", 1.0))
+		if venting.has(zi2):
+			var o2: Dictionary = venting[zi2]
+			if G.time - float(o2["at"]) < PULL_FOR and not c.suited():
+				var to_hole: Vector3 = o2["pos"] - c.position
+				to_hole.y = 0.0
+				if to_hole.length() > 1.5:
+					c.vent_push = to_hole.normalized() * 2.6     # swept toward the hole
+		if air2 < 0.35:
+			c.breathe_vacuum(dt)
 
 
 func vessel_process(dt: float) -> void:
@@ -1307,4 +1440,9 @@ func vessel_process(dt: float) -> void:
 		if _inf_t <= 0.0:
 			_inf_t = 0.5
 			_update_infection(0.5)
+		if not openings.is_empty():
+			_vent_t -= dt
+			if _vent_t <= 0.0:
+				_vent_t = 0.5
+				_vent_tick(0.5)
 	inf_mat.set_shader_parameter("to_local", global_transform.affine_inverse())

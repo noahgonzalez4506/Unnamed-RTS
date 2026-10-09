@@ -41,7 +41,7 @@ func _process(dt: float) -> void:
 			i += 1
 		return
 	if i >= shots.size():
-		get_tree().quit()
+		G.quit()
 		return
 	if G.time < 3.0:
 		return

@@ -46,6 +46,21 @@ func _ready() -> void:
 	add_child(_amb)
 
 
+## Quitting mid-sound would leave the audio server holding the clips (leaked at exit):
+## stop every player and let go of the streams first.
+func _exit_tree() -> void:
+	silence()
+
+
+## Stop everything and let go of the streams (before quitting: playbacks still mixing at exit leak).
+func silence() -> void:
+	for p in _pool + [_flat, _amb]:
+		if is_instance_valid(p):
+			p.stop()
+			p.stream = null
+	streams.clear()
+
+
 func play(name_: String, at: Vector3, vol_db: float = 0.0, big: bool = false) -> void:
 	if not streams.has(name_):
 		return

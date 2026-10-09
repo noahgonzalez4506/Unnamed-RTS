@@ -210,6 +210,7 @@ func park_fighter(idx: int, model: String = "FIGHTER") -> void:
 	for sb in f.find_children("*", "StaticBody3D", true, false):
 		(sb as StaticBody3D).collision_layer = 0          # pilots walk up to it, not into it
 	pads[idx]["parked"] = f
+	pads[idx]["model"] = model
 
 
 func parked_count() -> int:
@@ -233,7 +234,7 @@ func _physics_process(dt: float) -> void:
 	if since_hit > 6.0 and shields < max_shields:
 		shields = min(max_shields, shields + max_shields * 0.025 * dt * (1.25 if G.has_tech(team, "f1") else 1.0))
 	if G.is_client():
-		if net_pos != Vector3.INF and helm == null:
+		if net_pos != Vector3.INF:                   # (at our helm too: the host flies it from our input)
 			global_position = global_position.lerp(net_pos, clampf(dt * 5.0, 0.0, 1.0))
 			rotation.y = lerp_angle(rotation.y, net_yaw, clampf(dt * 5.0, 0.0, 1.0))
 		_turrets(dt)

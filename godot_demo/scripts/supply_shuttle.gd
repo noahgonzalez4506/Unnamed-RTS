@@ -146,6 +146,7 @@ func _process(dt: float) -> void:
 			if _fly_to(_home_point() + Vector3.UP * 4.0, 170.0 * (1.0 + G.tech_bonus(team, "darter_speed")), dt):
 				if home.kind == "ship" and home.has_method("darter_away"):
 					home.darter_away(false)
+				_return_cargo()
 				_gone()
 
 
@@ -161,6 +162,24 @@ func _unload() -> void:
 	if team == G.player_team:
 		G.say("Supply shuttle unloaded aboard %s: %d crew, %d boarders, %d supplies" % [target.display_name,
 			crew.size(), troops, int(supplies)], team)
+	crew = []
+	troops = 0
+	supplies = 0.0
+
+
+## Came home still loaded (the ship it was flying to was lost or changed sides): everyone and
+## everything aboard goes back where it came from.
+func _return_cargo() -> void:
+	var people: int = troops + crew.size()
+	if people <= 0 and supplies <= 0.0:
+		return
+	if home.kind == "station":
+		home.reserve = mini(home.reserve_cap, home.reserve + people)
+	else:
+		home.troops = mini(home.berth_cap, home.troops + people)
+	home.supplies = minf(home.supply_cap, home.supplies + supplies)
+	if team == G.player_team:
+		G.say("Supply shuttle back at %s with its load: %d people, %d supplies" % [home.display_name, people, int(supplies)], team)
 	crew = []
 	troops = 0
 	supplies = 0.0

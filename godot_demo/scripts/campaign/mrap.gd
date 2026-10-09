@@ -85,7 +85,7 @@ func _process(dt: float) -> void:
 			var near := 1.0e9
 			var any := false
 			for c in g0.occupants:
-				if is_instance_valid(c) and c.state == "alive" and c.get_meta("escort", null) == self:
+				if is_instance_valid(c) and c.state == "alive" and c.has_meta("escort") and c.get_meta("escort") == self:
 					any = true
 					near = minf(near, c.global_position.distance_to(global_position))
 			_wait = any and near > 40.0

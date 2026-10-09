@@ -318,7 +318,7 @@ func _build_help() -> void:
 	var sections := [
 		[left, "Commander", [["WASD · wheel · middle-drag", "pan · zoom · rotate"], ["Q / E", "turn the camera"],
 			["Left click / drag", "select (double-click: same role)"], ["Right click", "move · attack · capture"],
-			["X  ·  PgUp / PgDn", "look inside · change deck"], ["1 - 4", "jump to your ships and station"],
+			["X  ·  Up / Down", "look inside · change deck"], ["1 - 4", "jump to your ships and station"],
 			["B", "boarding pods (ships)"], ["L", "scramble fighters"], ["T", "train a squad (station)"],
 			["H · K", "hold · sabotage (soldiers)"], ["Tab", "take direct control"]]],
 		[right, "Direct control", [["WASD · mouse", "move · aim"], ["Shift · C · Space", "run · crouch · jump"],

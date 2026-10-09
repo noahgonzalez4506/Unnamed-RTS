@@ -247,6 +247,8 @@ func _send_snapshot() -> void:
 		var flags := (1 if c.crouch else 0) | (2 if c.rig.aiming else 0) | (4 if c.working else 0) | (8 if c.carrying else 0) \
 			| (16 if c.revive_t >= 0.0 else 0) | (32 if c.reload_t >= 0.0 else 0) | (64 if c.piloting else 0) \
 			| (128 if c.stun_t > 0.0 else 0)
+		if c.role == "grenadier":                      # the kit on the belt: shells (bits 8-10), rounds (11-12)
+			flags |= (clampi(c.gl_ammo, 0, 7) << 8) | (clampi(c.breach_ammo, 0, 3) << 11)
 		# riding a pod or shuttle: the mag field carries the craft's id (negative) instead
 		var mag_or_ride: float = c.mag if c.riding == null or not is_instance_valid(c.riding) else -float(c.riding.get_meta("net_id", 0))
 		cs.append_array([c.get_meta("net_id", 0), c.position.x, c.position.y, c.position.z, c.rotation.y,
@@ -333,6 +335,15 @@ func _snapshot(vs: PackedFloat32Array, cs: PackedFloat32Array, fs: PackedFloat32
 		c.working = flags & 4 != 0
 		c.revive_t = 0.5 if flags & 16 != 0 else -1.0
 		c.reload_t = 0.5 if flags & 32 != 0 else -1.0
+		if c.team != 4 and c.role != "infected":
+			c.rig.twitch = 1.0 if flags & 128 != 0 else 0.0     # EMP'd on the host
+		if c.role == "grenadier":
+			var ga: int = (flags >> 8) & 7
+			var ba: int = (flags >> 11) & 3
+			if ga != c.gl_ammo or ba != c.breach_ammo:
+				c.gl_ammo = ga
+				c.breach_ammo = ba
+				c.kit_refresh()
 		c.visible = flags & 64 == 0
 		if (flags & 8 != 0) != c.carrying:
 			c.carrying = flags & 8 != 0
@@ -472,6 +483,10 @@ func _send_slow() -> void:
 				st = 1 if not dd["fallen"] else (2 if (dd.get("push_n", dd["n"]) as Vector3).dot(dd["n"]) >= 0.0 else 3)
 			ds.append(st)
 		d["doors"] = ds
+		var ws := PackedByteArray()
+		for wd in v.breach_walls:
+			ws.append(1 if wd["breached"] else 0)
+		d["walls"] = ws
 		d["supplies"] = v.supplies
 		if v.kind == "station":
 			d["reserve"] = v.reserve
@@ -483,6 +498,7 @@ func _send_slow() -> void:
 		else:
 			d["troops"] = v.troops
 			d["pads"] = v.pads.map(func(p): return p["parked"] != null)
+			d["lock"] = G.vessels.find(v.lock) if v.lock != null and is_instance_valid(v.lock) else -1
 		vs.append(d)
 	_slow.rpc(vs, G.resources, G.research, G.researching, G.game_over)
 
@@ -519,6 +535,10 @@ func _slow(vs: Array, res: Dictionary, research: Dictionary, researching: Dictio
 				else:
 					dd["fallen"] = true
 					v._lay_flat(dd, dd["n"] * (1.0 if st == 2 else -1.0))
+		if d.has("walls"):
+			for j in min(v.breach_walls.size(), d["walls"].size()):
+				if d["walls"][j] == 1 and not v.breach_walls[j]["breached"]:
+					v.breach_door(v.breach_walls[j])          # blown on the host: open it here too
 		if d.has("modules"):
 			for code in d["modules"]:
 				if v.modules.has(code) and v.modules[code]["state"] != d["modules"][code]:
@@ -527,6 +547,9 @@ func _slow(vs: Array, res: Dictionary, research: Dictionary, researching: Dictio
 			v.set_meta("net_training", d["training"])
 		if d.has("troops"):
 			v.troops = d["troops"]
+		if d.has("lock"):
+			var li: int = int(d["lock"])
+			v.lock = G.vessels[li] if li >= 0 and li < G.vessels.size() else null
 		if d.has("supplies"):
 			v.supplies = d["supplies"]
 		if d.has("reserve"):
@@ -581,6 +604,33 @@ func _my_state(id: int, pos: Vector3, yaw: float, pitch: float, crouch: bool, ad
 	c.rig.aiming = ads or c.armed
 
 
+## At a ship's helm on a client: stream the controls to the host, which flies the ship.
+func send_helm(v: Node) -> void:
+	_helm_t -= get_process_delta_time()
+	if _helm_t > 0.0 or G.possessed == null:
+		return
+	_helm_t = 1.0 / 20.0
+	_helm_in.rpc_id(1, G.possessed.get_meta("net_id", 0), G.vessels.find(v), v.helm_throttle, v.helm_turn,
+		v.manual_aim, v.manual_fire)
+
+
+var _helm_t := 0.0
+
+
+@rpc("any_peer", "unreliable_ordered")
+func _helm_in(id: int, vi: int, throttle: float, turn: float, aim: Vector3, fire: bool) -> void:
+	var c: Node = G.net_ids.get(id)
+	if c == null or not is_instance_valid(c) or c.owner_peer != multiplayer.get_remote_sender_id():
+		return
+	if vi < 0 or vi >= G.vessels.size() or G.vessels[vi].get("helm") != c:
+		return
+	var sh: Node = G.vessels[vi]
+	sh.helm_throttle = clampf(throttle, -1.0, 1.0)
+	sh.helm_turn = clampf(turn, -1.0, 1.0)
+	sh.manual_aim = aim
+	sh.manual_fire = fire
+
+
 func send_fire(c: Node, from: Vector3, dir: Vector3) -> void:
 	_fire.rpc_id(1, c.get_meta("net_id", 0), from, dir)
 
@@ -618,17 +668,49 @@ func _action(id: int, what: String, args: Array) -> void:
 			if not c.medpens.is_empty():
 				c.rig.show_slot(c.medpens.pop_back(), false)
 				c.hp = min(c.max_hp, c.hp + 40)
-		"use":
+		"use":                                         # E on a client: what commander.interact does here
+			var v: Node = c.vessel
+			if v.has_method("defuse_near") and v.defuse_near(c.position, c.team):
+				return
+			if v.has_method("room_near") and G.enemies(c.team, v.team):
+				var room: String = v.room_near(c.position, 3.0)
+				if room != "":
+					v.plant_demo(c.position, room, c.team)
+					return
 			c.player_use({})
 		"sabotage":
-			if c.vessel.has_method("sabotage"):
+			if c.vessel.has_method("sabotage") and G.enemies(c.team, c.vessel.team):
 				c.vessel.sabotage(args[0], c.team)
 		"purge":
 			c.purging = args[0]
+		"helm":                                        # [vessel index, taking it / leaving it]
+			var vi: int = args[0]
+			if vi < 0 or vi >= G.vessels.size():
+				return
+			var sh: Node = G.vessels[vi]
+			if sh.kind != "ship" or sh.team != c.team:
+				return
+			if bool(args[1]):
+				if sh.helm == null or not is_instance_valid(sh.helm) or sh.helm.state != "alive":
+					sh.helm = c
+					c.piloting = sh
+					sh.move_target = Vector3.INF
+					sh.attack_target = null
+			elif sh.helm == c:
+				sh.helm = null
+				sh.manual_aim = Vector3.INF
+				sh.manual_fire = false
+				sh.helm_throttle = 0.0
+				sh.helm_turn = 0.0
+				c.piloting = null
 		"fighter_hit":
 			var vi: int = args[0]
 			if vi >= 0 and vi < G.vessels.size():
 				G.vessels[vi].take_hit(3.0, args[1])
+			elif args.size() > 2 and int(args[2]) > 0:
+				var t: Node = G.net_ids.get(int(args[2]))
+				if t and is_instance_valid(t) and t.has_method("take_hit") and G.enemies(c.team, int(t.get("team"))):
+					t.take_hit(3.0, args[1])
 
 
 func request_spawn(role: String, vessel_index: int) -> void:

@@ -1,6 +1,9 @@
 extends CharacterBody3D
-## First-person test player. Walks with gravity inside ships and stations;
-## press V for EVA mode (no gravity, fly in the direction you look).
+## UNUSED: nothing loads this script. It is the original first-person test player, kept as a
+## reference for zero-g / EVA movement (still to build into character.gd). The game's first
+## person is character.gd _player_physics with commander.gd.
+## Walks with gravity inside ships and stations; press V for EVA mode (no gravity, fly in the
+## direction you look).
 
 const WALK := 4.5
 const RUN := 8.0

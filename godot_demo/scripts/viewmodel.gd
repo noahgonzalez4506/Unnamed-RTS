@@ -7,7 +7,7 @@ extends Node3D
 ## Sights by weapon type:
 ##   iron sights (pistols, shotguns): a rear notch and a front post
 ##   holo / red dot (rifles, SMGs, LMGs): an open frame with a glowing dot
-##   scope (marksman and sniper rifles): a tube whose rear lens shows a live zoomed view
+##   scope (sniper and beam rifles, the PulseCarbine): a tube whose rear lens shows a live zoomed view
 ##   (picture-in-picture from a second camera) with a reticle
 ## Lives on render layer 2, so the scope camera never sees it.
 

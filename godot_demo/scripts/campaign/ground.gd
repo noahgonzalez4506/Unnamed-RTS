@@ -58,6 +58,22 @@ func _add_region(nm: NavigationMesh, t: Vector2i = Vector2i(-99999, -99999)) -> 
 		if _regions.has(t):
 			NavigationServer3D.free_rid(_regions[t])
 		_regions[t] = reg
+	else:
+		_loose_regions.append(reg)
+
+
+var _loose_regions: Array = []     # regions with no tile (freed with the ground)
+
+
+func _free_nav() -> void:
+	_queue.clear()
+	for t in _regions:
+		NavigationServer3D.free_rid(_regions[t])
+	_regions.clear()
+	for reg in _loose_regions:
+		NavigationServer3D.free_rid(reg)
+	_loose_regions.clear()
+	super()
 
 
 ## Something was built on the ground at runtime (a player outpost structure): carve its

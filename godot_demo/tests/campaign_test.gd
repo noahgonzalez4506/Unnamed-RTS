@@ -241,7 +241,10 @@ func _physics_process(dt: float) -> void:
 				var rr := RandomNumberGenerator.new()
 				rr.seed = 99
 				var cov0: int = G.match_node.ground_cover.size()
-				load("res://scripts/campaign/ruins.gd")._city(G.match_node, G.match_node.system,
+				var Lc: Dictionary = G.match_node.system.duplicate()
+				if not Lc.has("city_site"):
+					Lc["city_site"] = {"center": Vector3(900, 0, 900), "radius": 330.0}
+				load("res://scripts/campaign/ruins.gd")._city(G.match_node, Lc,
 					load("res://scripts/campaign/surface.gd")._terrain_params(G.match_node.system), rr)
 				report["city_cover_points"] = G.match_node.ground_cover.size() - cov0
 				var gnd: Node3D = G.match_node.ground

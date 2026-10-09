@@ -65,9 +65,11 @@ static func ramp_foot(s: Node3D) -> Vector3:
 	return p
 
 
-## Lower the ramp and drive the bay's vehicles out, one every second and a bit.
-static func drive_out(s: Node3D, kinds: Array) -> void:
-	if kinds.is_empty():
+## Lower the ramp and drive the bay's vehicles out, one every second and a bit. `bay` is the
+## ship record's own list: each vehicle leaves it only as it rolls out, so one still aboard
+## when the ship takes off (or the scene changes) stays aboard.
+static func drive_out(s: Node3D, bay: Array) -> void:
+	if bay.is_empty():
 		return
 	ramp_down(s)
 	var m: Node = G.match_node
@@ -77,13 +79,15 @@ static func drive_out(s: Node3D, kinds: Array) -> void:
 	out = out.normalized()
 	var tree: SceneTree = s.get_tree()
 	await tree.create_timer(1.7).timeout
-	for i in kinds.size():
-		if not is_instance_valid(s) or m.ground == null:
+	var count: int = bay.size()
+	for i in count:
+		if not is_instance_valid(s) or m.ground == null or bay.is_empty():
 			return
+		var kind: String = bay.pop_front()
 		var v: Node3D = VEHICLE.new()
-		v.setup(kinds[i], s.team, G.team_fac(s.team), m.ground, m.ground.snap_local(m.ground.to_local(foot)))
+		v.setup(kind, s.team, G.team_fac(s.team), m.ground, m.ground.snap_local(m.ground.to_local(foot)))
 		v.rotation.y = atan2(-out.x, -out.z)
-		if kinds[i] == "ifv" and s.troops >= 6:
+		if kind == "ifv" and s.troops >= 6:
 			s.troops -= 6
 			v.passengers = 6
 		v.order_move(foot + out * (30.0 + (i / 3) * 14.0) + out.cross(Vector3.UP) * ((i % 3) * 12.0 - 12.0))

@@ -17,6 +17,8 @@ var ip_edit: LineEdit
 var name_edit: LineEdit
 var status: Label
 var lobby_list: VBoxContainer
+var lobby_side: Array = []         # the lobby's side / role buttons (shown as the host has us)
+var lobby_role: Array = []
 
 
 func _ready() -> void:
@@ -112,13 +114,14 @@ func _button(parent: Node, text: String, cb: Callable, wide: float = 300.0) -> B
 	return b
 
 
-func _choice(parent: Node, label: String, options: Array, current: int, cb: Callable) -> void:
+func _choice(parent: Node, label: String, options: Array, current: int, cb: Callable) -> Array:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	parent.add_child(row)
 	var l := _label(row, label, 13, DIM)
 	l.custom_minimum_size.x = 110
 	var group := ButtonGroup.new()
+	var buttons: Array = []
 	for i in options.size():
 		var b := Button.new()
 		b.text = options[i]
@@ -132,6 +135,8 @@ func _choice(parent: Node, label: String, options: Array, current: int, cb: Call
 		b.add_theme_stylebox_override("hover", _style(Color(0.1, 0.18, 0.26, 0.95), ACCENT))
 		b.toggled.connect(func(on): if on: cb.call(i))
 		row.add_child(b)
+		buttons.append(b)
+	return buttons
 
 
 func _page() -> VBoxContainer:
@@ -302,8 +307,8 @@ func _lobby_page() -> Control:
 	lobby_list.add_theme_constant_override("separation", 4)
 	lobby_list.custom_minimum_size = Vector2(520, 120)
 	v.add_child(lobby_list)
-	_choice(v, "My side", ["Vanguard (F1)", "Ascendancy (F2)"], 0, func(i): G.network.set_my_choice(i + 1, ""))
-	_choice(v, "My role", ["Commander", "Soldier"], 0, func(i): G.network.set_my_choice(0, ["commander", "soldier"][i]))
+	lobby_side = _choice(v, "My side", ["Vanguard (F1)", "Ascendancy (F2)"], 0, func(i): G.network.set_my_choice(i + 1, ""))
+	lobby_role = _choice(v, "My role", ["Commander", "Soldier"], 0, func(i): G.network.set_my_choice(0, ["commander", "soldier"][i]))
 	_label(v, "Sides without a human commander are run by the AI. Any number of soldiers per side.", 12, DIM)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
@@ -324,6 +329,12 @@ func _refresh_lobby() -> void:
 		var l := _label(lobby_list, "%s%s   ·   %s   ·   %s" % [p["name"], "  (host)" if id == 1 else "",
 			G.team_name(p["team"]), p["role"].capitalize()], 14, G.team_color(p["team"]))
 		l.add_theme_color_override("font_outline_color", Color.BLACK)
+	var me: Dictionary = G.network.players.get(multiplayer.get_unique_id(), {})
+	if not me.is_empty():                            # (a joiner starts as a soldier, maybe on side 2)
+		for i in lobby_side.size():
+			(lobby_side[i] as Button).set_pressed_no_signal(int(me["team"]) == i + 1)
+		for i in lobby_role.size():
+			(lobby_role[i] as Button).set_pressed_no_signal(me["role"] == ["commander", "soldier"][i])
 	for b in pages["lobby"].find_children("*", "Button", true, false):
 		if b.has_meta("host_only"):
 			b.disabled = not multiplayer.is_server()

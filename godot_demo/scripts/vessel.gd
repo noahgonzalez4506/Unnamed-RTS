@@ -490,6 +490,22 @@ func _exit_tree() -> void:
 	_wall_links.clear()
 
 
+## The navigation map and region are server-side: free them with the vessel, or every
+## reload (jumps, landings, zone switches) leaves another active map behind.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_free_nav()
+
+
+func _free_nav() -> void:
+	if nav_region.is_valid():
+		NavigationServer3D.free_rid(nav_region)
+		nav_region = RID()
+	if nav_map.is_valid():
+		NavigationServer3D.free_rid(nav_map)
+		nav_map = RID()
+
+
 func _door_cell(p: Vector3) -> Vector3i:
 	return Vector3i(floori(p.x / 4.0), floori(p.y / 4.0), floori(p.z / 4.0))
 
@@ -629,8 +645,8 @@ func blast_doors(at_world: Vector3, radius: float, dmg: float) -> void:
 
 ## Plant a breaching charge: it blows after a short fuse (any kind of door).
 func plant_charge(d: Dictionary, by: Node) -> bool:
-	if d["breached"] or d.get("charged", false):
-		return false
+	if d["breached"] or d.get("charged", false) or G.is_client():
+		return false                                     # (a client's charge is the host's to set)
 	d["charged"] = true
 	var push: Vector3 = (d["center"] as Vector3) - (by.position if by and by.get("vessel") == self else d["center"])
 	push.y = 0.0
@@ -1264,26 +1280,31 @@ func room_repaired(job: Dictionary) -> void:
 
 
 func vessel_process(dt: float) -> void:
-	if not demo_charges.is_empty() or _demo_ai_t <= 0.0:
-		_charges_tick(dt)
-	else:
-		_demo_ai_t -= dt
+	# a network client only animates: charges, captures and the infection are the host's to run
+	# (the slow sync brings their results: doors, walls, teams, zones)
+	var host := not G.is_client()
+	if host:
+		if not demo_charges.is_empty() or _demo_ai_t <= 0.0:
+			_charges_tick(dt)
+		else:
+			_demo_ai_t -= dt
 	alarm = max(0.0, alarm - dt)
 	_door_t -= dt
 	if _door_t <= 0.0:
 		_door_t = 0.15
 		_update_doors()
 	_animate_doors(dt)
-	if not _charges.is_empty():
+	if host and not _charges.is_empty():
 		_update_charges(dt)
 	_update_elevators(dt)
 	_red_alert_lights()
-	_cap_t -= dt
-	if _cap_t <= 0.0:
-		_cap_t = 0.5
-		_update_capture(0.5)
-	_inf_t -= dt
-	if _inf_t <= 0.0:
-		_inf_t = 0.5
-		_update_infection(0.5)
+	if host:
+		_cap_t -= dt
+		if _cap_t <= 0.0:
+			_cap_t = 0.5
+			_update_capture(0.5)
+		_inf_t -= dt
+		if _inf_t <= 0.0:
+			_inf_t = 0.5
+			_update_infection(0.5)
 	inf_mat.set_shader_parameter("to_local", global_transform.affine_inverse())

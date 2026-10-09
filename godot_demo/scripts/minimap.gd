@@ -68,7 +68,7 @@ func _draw() -> void:
 		if is_instance_valid(p) and p.visible:
 			draw_circle(_to_map(p.global_position), 1.6, Color(1, 1, 1))
 	for m in G.missiles:
-		if is_instance_valid(m):
+		if is_instance_valid(m) and m.visible:
 			draw_circle(_to_map(m.global_position), 1.2, Color(1, 0.8, 0.3))
 	if G.commander:
 		var cp := _to_map(G.commander.pivot)

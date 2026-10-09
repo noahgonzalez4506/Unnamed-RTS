@@ -185,6 +185,14 @@ static func _city(m: Node, L: Dictionary, P: Dictionary, r: RandomNumberGenerato
 			for lt in lots.slice(0, 2 + r.randi() % 3):
 				var w: float = r.randf_range(12.0, 18.0)
 				var dp: float = maxf(12.0, w * r.randf_range(0.75, 1.2))
+				# keep the walls off the sidewalks: the lot centre is BLOCK/4 from the street on each
+				# side (depth runs along ax, width along az); avenues (every third line) are 14 m wide
+				var sx: int = i + (1 if lt[0] > 0 else 0)
+				var sz: int = j + (1 if lt[1] > 0 else 0)
+				var room_x: float = BLOCK * 0.25 - (14.0 if sx % 3 == 0 else 10.0) * 0.5 - 2.8
+				var room_z: float = BLOCK * 0.25 - (14.0 if sz % 3 == 0 else 10.0) * 0.5 - 2.8
+				dp = minf(dp, room_x * 2.0)
+				w = minf(w, room_z * 2.0)
 				var lp: Vector3 = bc + ax * (float(lt[0]) * (BLOCK * 0.25)) + az * (float(lt[1]) * (BLOCK * 0.25))
 				var face: float = th + (PI * 0.5 if lt[0] > 0 else -PI * 0.5)
 				var p: Vector3 = Vector3(lp.x, gy, lp.z)
@@ -224,14 +232,19 @@ static func _city(m: Node, L: Dictionary, P: Dictionary, r: RandomNumberGenerato
 	m.add_child(lab)
 	# salvage caches, in the streets
 	var key0: String = "%s_city" % L["seed"]
-	var taken: Array = G.campaign.world.get(key0, {}).get("taken", []) if G.campaign else []
+	var taken: Array = []                         # (ids come back from a saved game as floats)
+	for t in (G.campaign.world.get(key0, {}).get("taken", []) if G.campaign else []):
+		taken.append(int(t))
 	for i in 4 + r.randi() % 3:
-		if i in taken or streets.is_empty():
+		if streets.is_empty():
 			continue
+		# draw every number first, so taking one cache doesn't move the others (or the occupants)
 		var sg3: Array = streets[r.randi() % streets.size()]
 		var cp: Vector3 = (sg3[0] as Vector3).lerp(sg3[1], r.randf())
 		cp.y = gy + SURFACE.height(P, L, cp.x, cp.z) + 1.0
 		var kind: String = ["cores", "alloys", "research", "alloys", "cores"][r.randi() % 5]
+		if i in taken:
+			continue
 		var cache := Node3D.new()
 		cache.position = cp
 		cache.set_meta("cache", kind)

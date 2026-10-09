@@ -334,7 +334,7 @@ func _repair_tick(dt: float) -> void:
 	var md: Dictionary = modules[code]
 	md["hull"] = min(md["max"], md["hull"] + 500.0)
 	for j in repairs:
-		if j["module"] == code:
+		if j.get("module", "") == code:
 			return
 	if md["state"] in ["sabotaged", "disabled"]:
 		md["hull"] = max(md["hull"], md["max"] * 0.6)

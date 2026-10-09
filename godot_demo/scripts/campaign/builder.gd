@@ -118,7 +118,7 @@ static func _deliver(entry: Dictionary, item: String) -> void:
 				e["core"] = true
 			c.fleet.append(e)
 			if st:
-				var s: Node3D = G.match_node.spawn_runtime_ship(cls, 1, 1, nm, p, load("res://scripts/campaign/sector.gd").SHIP_CREWS.get(cls, []))
+				var s: Node3D = G.match_node.spawn_runtime_ship(cls, 1, 1, nm, p, load("res://scripts/campaign/sector.gd").SHIP_CREWS.get(cls, []), "", int(e["variant"]))
 				s.set_meta("fleet_id", e["id"])
 				if it.get("core", false):
 					s.set_meta("core_ship", true)
@@ -165,7 +165,7 @@ static func _deliver(entry: Dictionary, item: String) -> void:
 			G.say("A new cargo Darter is flying from %s" % entry["name"], 1)
 		"fighter", "bomber":
 			var placed := false
-			if G.match_node:
+			if G.match_node and here:                     # (a carrier in the station's own system)
 				var ships: Array = G.vessels.filter(func(v): return v.kind == "ship" and v.team == 1 and not v.destroyed)
 				ships.sort_custom(func(a, b): return a.global_position.distance_to(base) < b.global_position.distance_to(base))
 				for s2 in ships:
@@ -181,7 +181,9 @@ static func _deliver(entry: Dictionary, item: String) -> void:
 				var q2: Array = entry.get("queue", [])
 				q2.append({"item": item, "left": 20.0})       # no free pad yet: wait and try again
 				entry["queue"] = q2
-				G.say("No free hangar pad for the new %s: bring a carrier home" % it["kind"], 1)
+				if int(entry.get("hangar_note", -1)) != int(c.day / 60.0):
+					entry["hangar_note"] = int(c.day / 60.0)              # (say it now and then, not every retry)
+					G.say("The new %s waits at %s for a carrier with a free hangar pad" % [it["kind"], entry["name"]], 1)
 		"troops":
 			if st:
 				st.reserve += 6

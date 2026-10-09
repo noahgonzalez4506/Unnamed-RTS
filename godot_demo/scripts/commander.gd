@@ -348,6 +348,8 @@ func _vehicle_frame(dt: float) -> void:
 		var h := get_world_3d().direct_space_state.intersect_ray(q)
 		v.manual_aim = h.position if not h.is_empty() and v.aabb.grow(10.0).has_point(v.to_local(h.position)) == false else to
 		v.manual_fire = Input.is_action_pressed("fire")
+		if G.is_client():
+			G.network.send_helm(v)
 	pivot = center
 
 
@@ -676,6 +678,8 @@ func take_helm(ship: Node) -> void:
 	chase_dist = 0.0
 	chase_yaw = 0.0
 	c.rig.set_first_person(false)
+	if G.is_client():
+		G.network.send_action(c, "helm", [G.vessels.find(ship), true])     # the host flies it for us
 	log_event("You have the helm of %s. W/S throttle, A/D turn, mouse aims, LMB fires, B boards, E leaves." % ship.display_name, TEAM)
 
 
@@ -716,6 +720,8 @@ func leave_vehicle() -> void:
 		v.manual_aim = Vector3.INF
 		v.manual_fire = false
 		v.helm_throttle = 0.0
+		if G.is_client():
+			G.network.send_action(c, "helm", [G.vessels.find(v), false])
 	c.piloting = null
 	c.visible = true
 	c.collision_layer = G.LAYER_CHAR
@@ -1106,10 +1112,14 @@ func interact() -> void:
 	if nv:
 		drive(nv)
 		return
-	if v.has_method("defuse_near") and v.defuse_near(c.position, c.team):
+	if G.is_client() and v.has_method("room_near") and G.enemies(c.team, v.team) and v.room_near(c.position, 3.0) != "":
+		G.network.send_action(c, "use", [])           # the host sets the demolition charges
+		log_event("Charges set on the %s: get clear, 10 s" % v.room_near(c.position, 3.0), TEAM)
+		return
+	if not G.is_client() and v.has_method("defuse_near") and v.defuse_near(c.position, c.team):
 		log_event("Charge defused", TEAM)
 		return
-	if v.has_method("room_near") and G.enemies(c.team, v.team):
+	if not G.is_client() and v.has_method("room_near") and G.enemies(c.team, v.team):
 		var room: String = v.room_near(c.position, 3.0)
 		if room != "":
 			v.plant_demo(c.position, room, c.team)
@@ -1136,12 +1146,18 @@ func interact() -> void:
 		G.match_node.command("join_board", [c.get_meta("net_id", 0), G.vessels.find(v)])
 		log_event("You're going: stay at the %s for launch" % ("pod bay" if v.boarding["kind"] == "pods" else "hangar"), TEAM)
 		return
+	# on a client the host does the same for our body there (defusing, doors, charges, the
+	# armory); we run it here too so our own magazines and kit match
+	if G.is_client():
+		G.network.send_action(c, "use", [])
 	var r: String = c.player_use(hit)
 	if r != "":
 		log_event(r, TEAM)
 		return
 	if c.role == "scientist":
 		c.purging = not c.purging
+		if G.is_client():
+			G.network.send_action(c, "purge", [c.purging])
 		log_event("Purge emitter %s" % ("ON" if c.purging else "off"), TEAM)
 		return
 	var sp := _sabotage_spot(c)
@@ -1152,8 +1168,13 @@ func interact() -> void:
 		get_tree().create_timer(3.0).timeout.connect(func():
 			if is_instance_valid(c) and c.state == "alive":
 				c.working = false
-				v.sabotage(code, c.team))
+				if G.is_client():
+					G.network.send_action(c, "sabotage", [code])
+				else:
+					v.sabotage(code, c.team))
 		return
+	if G.is_client():
+		return                                         # (the host may still defuse something: it says so)
 	log_event("Nothing to use here", TEAM)
 
 

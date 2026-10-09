@@ -134,6 +134,7 @@ static func populate(m: Node) -> void:
 		var v: Node3D = m._station(cls, team, fac, {"pirate_camp": "Outlaw Camp", "hive": "Infected Hive", "colony": "Colony Works",
 			"asc_outpost": "Ascendancy Outpost"}.get(kind, "Outpost"), bs["pos"], crew)
 		v.set_meta("key", bs["key"])
+		v.set_meta("spawn_team", team)                 # (snapshot records a capture against this)
 		if team == 2:
 			for kk in ["tank", "mrap_ai", "ifv"]:
 				m.ground_vehicles.append([bs["pos"] + Vector3(randf_range(-150, 150), 0, randf_range(-150, 150)), kk, 2, 2])
@@ -146,7 +147,8 @@ static func populate(m: Node) -> void:
 			continue
 		var p: Vector3 = L["landing"] + Vector3((k % 3) * 220.0, 0, (k / 3) * 260.0)
 		k += 1
-		var s2: Node3D = m._ship(e["cls"], 1, int(e.get("fac", 1)), e["name"], p, load("res://scripts/campaign/sector.gd").crew_for(e))
+		var s2: Node3D = m._ship(e["cls"], 1, int(e.get("fac", 1)), e["name"], p, load("res://scripts/campaign/sector.gd").crew_for(e), int(e.get("variant", 0)))
+		m.restore_hangar(s2, e)
 		s2.hull = s2.max_hull * float(e.get("hull", 1.0))
 		s2.troops = mini(s2.berth_cap, int(e.get("troops", s2.troops)))
 		s2.supplies = float(e.get("supplies", s2.supplies))

@@ -69,6 +69,9 @@ func _physics_process(dt: float) -> void:
 
 
 func _go_off() -> void:
+	if G.is_client():
+		queue_free()                                     # (only a picture here: the host's round opens it)
+		return
 	var nose: Vector3 = model.global_transform * Vector3(0, 0, 0.07)
 	var d := {}
 	if vessel and is_instance_valid(vessel):

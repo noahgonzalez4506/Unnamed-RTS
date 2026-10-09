@@ -9,7 +9,7 @@ Everything made so far for your space FPS/RTS game, organized so you can start b
 
 | Folder | What it is |
 |---|---|
-| **`godot_test/`** | **Start here.** A ready-to-run Godot project: walk your ships and a station, open doors, breach, sabotage, fly EVA. See `godot_test/README.md`. |
+| **`godot_demo/`** | **Start here.** A ready-to-run Godot project: walk your ships and a station, open doors, breach, sabotage, fly fighters. See `godot_demo/README.md`. |
 | `tools/export_glb.py` | Writes game-ready `.glb` files (with collision and markers) for every ship and station without Blender, straight into the test project. |
 | `blender/ship_generator.py` | **Source of truth for ships and stations.** Builds every ship, craft, station, outpost and ground base in Blender. Change settings, re-run, re-export. |
 | `blender/character_generator.py` | **Source of truth for people and gear.** Builds both factions' robot soldiers and crew (15 roles each), their weapons and inventory items. |
@@ -191,10 +191,10 @@ A 12-system game should wrap up in about 2 hours.
 - Blender 4: https://www.blender.org/download
 
 **2. Play the test level.**
-1. In Godot's Project Manager, click **Import** and pick `godot_test/project.godot`.
+1. In Godot's Project Manager, click **Import** and pick `godot_demo/project.godot`.
 2. Let it import, then press **F5**.
 
-Controls are on screen and in `godot_test/README.md`. To view a single model, drag it from `models_obj/` or `godot_test/models/` into Godot's FileSystem panel and double-click it.
+Controls are on screen and in `godot_demo/README.md`. To view a single model, drag it from `models_obj/` or `godot_demo/models/` into Godot's FileSystem panel and double-click it.
 
 **3. Generate in Blender (when you want to edit models by hand).** You don't need Blender to play: `tools/export_glb.py` already makes `.glb` files with collision and markers. Use Blender when you want to tweak or paint models.
 1. Open Blender, go to the **Scripting** tab and click **Open**, then choose `blender/ship_generator.py`.

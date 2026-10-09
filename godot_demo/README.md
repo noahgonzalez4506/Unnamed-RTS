@@ -40,7 +40,7 @@ You run your own company. It flies Vanguard ships and kit, but it isn't the Vang
 
 **Your start:** a small frigate, two mining craft and a starter station (reactor, refinery, fabricator, docking ring), in Vanguard space at the west edge of the galaxy.
 
-**The galaxy:** nine systems joined by jump lanes, each with 1–3 planets scaled to fit the system.
+**The galaxy:** six systems joined by jump lanes, each with 1–3 planets scaled to fit the system.
 - **Planet types:** barren, ice, desert, volcanic, jungle, ocean, gas giant and **infected**.
 - **Vanguard space (west):** Vanguard Navy stations and patrols, plus **Union Merchant Guild** trade stations.
 - **Ascendancy space (east):** Ascendancy patrols and fortresses, plus **Concord Free Traders**.
@@ -131,7 +131,8 @@ Each warship has three procedurally generated layouts; the match picks one. The 
 | Space | Jump. Press it again in the air for an exo boost jump. |
 | V | Exo dash |
 | Left / right mouse | Fire / aim down sights |
-| R, G, Q | Reload, grenade, revive pen (on yourself) |
+| R, G, Q | Reload, grenade (Shift+G: EMP), revive pen (on yourself) |
+| B | Grenadier: rifle → 40 mm launcher → breaching round → rifle (skips any that are empty) |
 | E | Use: revive (pen or the medic's revive gun), drag a downed friend / lay them on a medbay bed, elevator, ready locker or armory, sabotage, take the helm, launch a fighter, **join a boarding party** at the pod bay or hangar, **kick in a door** or **set a breaching charge** |
 | 1–9, 0 | When you lead a squad: **1** follow, **2** hold, **3** move or stack on the door you're aiming at, **4** breach & clear that room, **5** suppress the aim point, **6** regroup on me, **7** formation (wedge / file / line), **8** fireteam B to the aim point (again to rejoin), **9** weapons free / tight, **0** frag out at the aim point |
 | T | Requisition reinforcements (300 alloys + 4 cores, 90 s cooldown). On a friendly vessel a squad of six comes up to you. Aboard the enemy, a friendly ship fires a pod in near you. |
@@ -275,7 +276,6 @@ Walk to the bridge pilot seat and press **E**.
 
 - **Performance:** aim for 60 fps on a mid-range PC. With 150+ characters fighting, physics is the main cost. The frame counter is in the top bar.
 - **Balance:** this is a first pass. Ship numbers are at the top of `scripts/ship.gd`, door strength is in `scripts/vessel.gd` (`DOOR_HP`), and weapons are in `data/weapons_and_armor.json`.
-- **Not in yet:** sound, the multi-system campaign map, shipbuilding and mining.
 
 ## Automatic checks (optional)
 

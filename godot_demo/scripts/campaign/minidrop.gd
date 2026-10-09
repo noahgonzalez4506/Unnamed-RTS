@@ -18,10 +18,15 @@ var stage_t := 0.0
 var vel := Vector3.ZERO
 var cargo: Array = []               # vehicle kinds
 var troops := 0
+var _camp = null                     # the campaign it was sent from, and its ship record
+var _fleet_id := -1
+var _back := false                   # docked home again, or lost: nothing left to hand back
 
 
 func setup(home_: Node3D, dest_: Vector3) -> void:
 	home = home_
+	_camp = G.campaign
+	_fleet_id = int(home.get_meta("fleet_id", -1))
 	team = home.team
 	faction = home.faction if home.faction in [1, 2] else 1
 	dest = dest_
@@ -214,6 +219,7 @@ func take_hit(d: float, _from: Vector3 = Vector3.ZERO, _by: Node = null) -> void
 	if hp <= 0.0:
 		G.explosion(global_position, 9.0)
 		G.say("A mini dropship was shot down with %d troops and %d vehicles aboard" % [troops, cargo.size()], team)
+		_back = true
 		G.pods.erase(self)
 		queue_free()
 
@@ -259,6 +265,7 @@ func _process(dt: float) -> void:
 				stage_t = 0.0
 		4:
 			if home == null or not is_instance_valid(home) or home.destroyed:
+				_back = true
 				G.pods.erase(self)
 				queue_free()
 				return
@@ -266,8 +273,28 @@ func _process(dt: float) -> void:
 				var e: Dictionary = G.campaign.fleet_entry(int(home.get_meta("fleet_id", -1)))
 				if not e.is_empty():
 					e["minidrops"] = int(e.get("minidrops", 0)) + 1
+				_back = true
 				G.pods.erase(self)
 				queue_free()
+
+
+## Still out when the scene goes (take-off, zone switch, jump): the craft, and whatever it
+## hadn't set down yet, go back aboard its ship's record rather than vanishing.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and not _back and _camp != null and G.campaign == _camp:
+		_back = true
+		owed_to(_camp.fleet_entry(_fleet_id))
+
+
+## Add this craft and its load to a ship record `e` (the live one, or a copy being saved).
+func owed_to(e: Dictionary) -> void:
+	if e.is_empty():
+		return
+	e["minidrops"] = int(e.get("minidrops", 0)) + 1
+	e["troops"] = int(e.get("troops", 0)) + troops
+	var bay: Array = e.get("vehicles", [])
+	bay.append_array(cargo)
+	e["vehicles"] = bay
 
 
 func _unload() -> void:

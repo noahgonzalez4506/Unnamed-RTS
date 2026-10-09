@@ -107,7 +107,8 @@ static func populate(m: Node) -> void:
 			k += 1
 		e.erase("arrive")
 		var cls: String = e["cls"]
-		var s2: Node3D = m._ship(cls, 1, int(e.get("fac", 1)), e["name"], p3, crew_for(e))
+		var s2: Node3D = m._ship(cls, 1, int(e.get("fac", 1)), e["name"], p3, crew_for(e), int(e.get("variant", 0)))
+		m.restore_hangar(s2, e)
 		s2.rotation.y = float(e.get("yaw", 0.0))
 		s2.hull = s2.max_hull * float(e.get("hull", 1.0))
 		s2.troops = mini(s2.berth_cap, int(e.get("troops", s2.troops)))

@@ -141,7 +141,7 @@ static func galaxy_tick(m: Node) -> void:
 				for si in pl.get("sites", []).size():
 					var key := "%d_%d_%d_0" % [int(sh["system"]), pi, si]
 					var w: Dictionary = c.world.get(key, {})
-					if not w.get("destroyed", false) and int(w.get("team", 0)) != 4:
+					if not w.get("destroyed", false) and int(w.get("team", 0)) != 4 							and not w.get("outpost", false) and int(w.get("team", 0)) != 1:   # (not the player's outposts)
 						cands.append([key, pl.get("name", "a world")])
 			if not cands.is_empty():
 				var pick: Array = cands[randi() % cands.size()]

@@ -402,8 +402,10 @@ func stack_breacher() -> Node:
 	if stack_door.is_empty() or stack_door.get("charged", false):
 		return null
 	var cur = stack_door.get("breacher")
-	if cur != null and is_instance_valid(cur) and cur.state == "alive" and cur != leader_player():
-		return cur
+	if cur != null and is_instance_valid(cur) and cur.state == "alive" and cur != leader_player() \
+			and (stack_door.get("kind", "door") == "door" or not cur.charges.is_empty() \
+				or (cur.role == "grenadier" and cur.breach_ammo > 0)):
+		return cur                                        # (still able to open it: else choose again)
 	var best: Node = null
 	var bs := -1
 	for m in alive():

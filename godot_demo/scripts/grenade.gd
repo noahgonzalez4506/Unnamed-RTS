@@ -29,7 +29,7 @@ func launch(from: Vector3, to: Vector3, who: Node, fac: int) -> void:
 	var d := to - from
 	var t: float = clamp(d.length() / 14.0, 0.4, 1.6)
 	vel = d / t + Vector3.UP * 0.5 * 9.8 * t
-	if fac == 2:
+	if fac == 2 and not emp:
 		fuse = 2.0
 
 
@@ -151,6 +151,8 @@ func _physics_process(dt: float) -> void:
 
 func _pulse() -> void:
 	G.flash(global_position, Color(0.4, 0.75, 1.0), 6.0, 8.0, 0.25)
+	if G.is_client():
+		return                                         # the host stuns; snapshot flag 128 brings it here
 	for c in G.characters:
 		if not is_instance_valid(c) or c.state != "alive":
 			continue

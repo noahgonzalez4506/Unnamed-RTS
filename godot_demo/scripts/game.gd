@@ -124,6 +124,9 @@ func reset() -> void:
 		team_names = {}
 		campaign = null
 	researching = {1: [], 2: []}
+	if config.get("mode", "") == "campaign" and campaign != null:
+		research[1] = campaign.research          # the campaign keeps the player's research across reloads
+		researching[1] = (campaign.researching as Array).duplicate()
 	net_ids.clear()
 	_next_net_id = 1
 	_used_names.clear()

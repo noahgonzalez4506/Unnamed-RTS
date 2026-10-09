@@ -302,11 +302,15 @@ func _folder(kind_: String, fac: int) -> String:
 	return "res://models/%s_%s" % [kind_, tag]
 
 
-func _ship(cls: String, team: int, fac: int, nm: String, pos: Vector3, crew: Array) -> Node3D:
-	# a procedural interior layout, picked by the match seed (same on every client)
+func _ship(cls: String, team: int, fac: int, nm: String, pos: Vector3, crew: Array, want_variant: int = 0) -> Node3D:
+	# a procedural interior layout, picked by the match seed (same on every client); a campaign
+	# ship keeps the layout it was saved with (the roll is still drawn, so others don't change)
 	var variant := 0
 	var path := "%s/ship_%s.glb" % [_folder("ships", fac), cls]
-	var vp := "%s/ship_%s_v%d.glb" % [_folder("ships", fac), cls, 1 + map_rng.randi() % 3]
+	var roll: int = 1 + map_rng.randi() % 3
+	var vp := "%s/ship_%s_v%d.glb" % [_folder("ships", fac), cls, want_variant if want_variant > 0 else roll]
+	if want_variant > 0 and not ResourceLoader.exists(vp):
+		vp = "%s/ship_%s_v%d.glb" % [_folder("ships", fac), cls, roll]
 	if ResourceLoader.exists(vp):
 		path = vp
 		variant = int(vp.get_slice("_v", vp.get_slice_count("_v") - 1).get_slice(".", 0))
@@ -560,6 +564,8 @@ func humans_on(team: int) -> bool:
 
 ## A fully overgrown compartment pushes out a new infected every so often.
 func spawn_swarmer(v: Node3D, z: Dictionary) -> void:
+	if G.is_client():
+		return                                         # (the host spawns them; snapshots bring them)
 	var n := 0
 	for c in v.occupants:
 		if c.team == 4 and c.state == "alive":
@@ -1098,9 +1104,11 @@ func _campaign_tick(dt: float) -> void:
 	c.day += 1.0
 	c.tick_markets(1.0)
 	var r: Dictionary = c.stores
-	# mining craft working in other systems still bring ore home
+	# mining craft working in other systems (or in this one while we're down on a planet: they
+	# don't fly in the surface scene) still bring ore home, if their station still stands
+	var keys: Array = c.stations.map(func(s): return s["key"])
 	for e in c.miners:
-		if int(e["system"]) != c.current:
+		if (int(e["system"]) != c.current or on_surface) and String(e.get("station", "")) in keys:
 			r["ore"] = float(r.get("ore", 0.0)) + 1.2
 	# refineries: ore into alloys
 	var refineries := 0
@@ -1279,8 +1287,8 @@ func planet_push(p: Vector3, margin: float = 80.0) -> Vector3:
 
 
 ## A ship that arrives while the system is running (hive ships rising, reinforcements).
-func spawn_runtime_ship(cls: String, team: int, fac: int, nm: String, pos: Vector3, crew: Array, role: String = "") -> Node3D:
-	var s := _ship(cls, team, fac, nm, pos, crew)
+func spawn_runtime_ship(cls: String, team: int, fac: int, nm: String, pos: Vector3, crew: Array, role: String = "", want_variant: int = 0) -> Node3D:
+	var s := _ship(cls, team, fac, nm, pos, crew, want_variant)
 	_pending.erase(_pending[-1])
 	if role != "":
 		s.set_meta("role", role)
@@ -1521,6 +1529,20 @@ func deploy_station(s: Node) -> String:
 	return "%s deployed: a new station of ours. Build segments on it from the STATION menu" % nm
 
 
+## A campaign ship's hangar as it was saved (bought craft, losses), instead of the two free
+## fighters every new ship gets. Records saved before hangars were kept have none.
+func restore_hangar(s: Node3D, e: Dictionary) -> void:
+	if not e.has("hangar"):
+		return
+	for p in s.pads:
+		if p["parked"] != null:
+			(p["parked"] as Node3D).queue_free()
+			p["parked"] = null
+	var hangar: Array = e["hangar"]
+	for i in mini(hangar.size(), s.pads.size()):
+		s.park_fighter(i, String(hangar[i]))
+
+
 ## Whatever infection was aboard when the ship was last seen is aboard again.
 func restore_ship_infection(s: Node3D, e: Dictionary) -> void:
 	var n: int = int(e.get("infected", 0))
@@ -1676,11 +1698,10 @@ func deploy_vehicles(s: Node) -> int:
 	if ground == null:
 		return 0
 	var bay: Array = ship_vehicles(s)
-	var kinds: Array = bay.duplicate()
-	bay.clear()
-	load("res://scripts/campaign/bays.gd").drive_out(s, kinds)
-	G.say("%s: ramp down, %d vehicles rolling out" % [s.display_name, kinds.size()], s.team)
-	return kinds.size()
+	var n: int = bay.size()
+	load("res://scripts/campaign/bays.gd").drive_out(s, bay)      # (takes each off the bay as it rolls out)
+	G.say("%s: ramp down, %d vehicles rolling out" % [s.display_name, n], s.team)
+	return n
 
 
 ## Our vehicles within 150 m of a landed ship drive back aboard (if there's room).
@@ -1731,7 +1752,9 @@ func send_minidrop(s: Node, world_p: Vector3) -> String:
 	md.setup(s, world_p)
 	if int(e.get("minidrop_reserve", 0)) > 0:
 		e["minidrop_reserve"] = int(e["minidrop_reserve"]) - 1
+		e["minidrops_following"] = int(e.get("minidrops_following", 0)) + 1     # (a save counts it as docked)
 		get_tree().create_timer(20.0).timeout.connect(func():
+			e["minidrops_following"] = maxi(0, int(e.get("minidrops_following", 0)) - 1)
 			e["minidrops"] = int(e.get("minidrops", 0)) + 1
 			G.say("A following mini dropship docked on %s" % e["name"], 1))
 	return "Mini dropship away from %s" % s.display_name

@@ -57,7 +57,8 @@ func toggle() -> void:
 
 func open() -> void:
 	visible = true
-	get_tree().paused = true
+	# in multiplayer the game runs on for everyone (a paused host would freeze every client)
+	get_tree().paused = not (G.network and G.network.active)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_show("main")
 

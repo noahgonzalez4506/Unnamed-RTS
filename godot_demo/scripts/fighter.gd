@@ -146,7 +146,8 @@ func player_fly(dt: float, steer: Vector2, roll: float, throttle_in: float, boos
 				who = n
 			if who and who != self and who.has_method("take_hit") and G.enemies(team, who.team):
 				if G.is_client():
-					G.network.send_action(G.possessed, "fighter_hit", [who.get_meta("net_vessel", -1), end])
+					# the host finds the target by its vessel index, or by network id (craft)
+					G.network.send_action(G.possessed, "fighter_hit", [G.vessels.find(who), end, int(who.get_meta("net_id", 0))])
 				else:
 					who.take_hit(3.0, end)
 				if G.commander:

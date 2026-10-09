@@ -28,6 +28,8 @@ var world := {}                     # NPC station key -> {"team": t, "destroyed"
 var visited: Array = []
 var arrive_from := -1               # the system we jumped in from (-1: not by jump)
 var surface := {}                   # down on a world: {"planet": i, "site": j}; empty in space
+var research := {}                  # the player's unlocked techs {id: true} (G.research[1] is this dict)
+var researching: Array = []         # the tech in progress: [id, seconds left], or []
 var _next_id := 1
 
 
@@ -82,10 +84,22 @@ static func load_game() -> RefCounted:
 
 
 func to_dict() -> Dictionary:
+	# mini dropships out (and followers on their way) are saved as docked, with their loads aboard
+	var fl: Array = fleet.duplicate(true)
+	for e in fl:
+		if int(e.get("minidrops_following", 0)) > 0:
+			e["minidrops"] = int(e.get("minidrops", 0)) + int(e["minidrops_following"])
+			e.erase("minidrops_following")
+	for p in G.pods:
+		if is_instance_valid(p) and p.get("_camp") == self and not p.get("_back"):
+			for e in fl:
+				if int(e["id"]) == int(p.get("_fleet_id")):
+					p.owed_to(e)
 	return {"version": 1, "seed": seed, "current": current, "company": company, "credits": credits, "day": day,
-		"fleet": fleet, "miners": miners, "stations": stations, "stores": stores, "standing": _int_keys_out(standing),
+		"fleet": fl, "miners": miners, "stations": stations, "stores": stores, "standing": _int_keys_out(standing),
 		"markets": markets, "offers": offers, "jobs": jobs, "world": world, "visited": visited,
-		"arrive_from": arrive_from, "next_id": _next_id, "surface": surface}
+		"arrive_from": arrive_from, "next_id": _next_id, "surface": surface,
+		"research": research, "researching": researching}
 
 
 func from_dict(d: Dictionary) -> void:
@@ -111,6 +125,12 @@ func from_dict(d: Dictionary) -> void:
 	visited = d.get("visited", [])
 	arrive_from = int(d.get("arrive_from", -1))
 	surface = d.get("surface", {})
+	research = d.get("research", {})
+	researching = d.get("researching", [])
+	if researching.size() == 2:
+		researching = [String(researching[0]), float(researching[1])]
+	else:
+		researching = []
 	_next_id = int(d.get("next_id", 100))
 	# JSON numbers come back as floats
 	for e in fleet:
@@ -243,9 +263,7 @@ func sell(key: String, e: Dictionary, good: String, n: int) -> String:
 	if c[good] <= 0:
 		c.erase(good)
 	G.stat("sold", n)
-	var msg := "Sold %d %s for %d cr" % [n, good, n * p]
-	var done := _deliveries(key, e)
-	return msg + done
+	return "Sold %d %s for %d cr" % [n, good, n * p]     # (deliveries are handed over when SERVICES opens)
 
 
 func tick_markets(dt: float) -> void:
@@ -355,11 +373,6 @@ func _pay(job: Dictionary) -> String:
 	return msg
 
 
-## Selling at a station also hands over any delivery due there.
-func _deliveries(key: String, _e: Dictionary) -> String:
-	return ""
-
-
 ## Hand over the goods for delivery jobs bound for this station, from fleet entry e.
 func deliver(key: String, e: Dictionary) -> String:
 	var out := ""
@@ -432,6 +445,16 @@ func snapshot() -> void:
 			e["infected_zones"] = inf_z
 			e["supplies"] = v.supplies
 			e["system"] = current
+			e["variant"] = v.variant
+			# the hangar: craft parked on the pads, and this carrier's fighters still out flying
+			var hangar: Array = []
+			for p in v.pads:
+				if p["parked"] != null:
+					hangar.append(p.get("model", "FIGHTER"))
+			for f in G.fighters:
+				if is_instance_valid(f) and f.carrier == v:
+					hangar.append("FIGHTER")
+			e["hangar"] = hangar.slice(0, v.pads.size())
 		elif v.kind == "ship" and id < 0 and v.team == 1 and not v.destroyed and v.get_meta("prize", false):
 			# a ship we captured: it joins the fleet
 			fleet.append({"id": new_id(), "cls": v.cls, "name": v.display_name, "variant": v.variant, "system": current,
@@ -455,9 +478,15 @@ func snapshot() -> void:
 				mine[0]["reserve"] = v.reserve
 				if v.destroyed or v.team != 1:
 					stations.erase(mine[0])
-			elif v.destroyed or v.team != int(_station_info(key).get("team", v.team)):
-				world[key] = {"team": v.team, "destroyed": v.destroyed}
+					miners = miners.filter(func(mn): return mn.get("station", "") != key)   # (its miners go with it)
+			elif v.destroyed or v.team != int(v.get_meta("spawn_team", _station_info(key).get("team", v.team))):
+				var rec: Dictionary = world.get(key, {})        # (keep whatever else the site records)
+				rec["team"] = v.team
+				rec["destroyed"] = v.destroyed
+				world[key] = rec
 	stores = G.resources.get(1, stores)          # (the same dictionary: everything reads and spends the one store)
+	research = G.research.get(1, research)
+	researching = (G.researching.get(1, []) as Array).duplicate()
 
 
 ## Jump: the ships go through the gate to system `to`.
